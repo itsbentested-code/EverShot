@@ -549,30 +549,38 @@ final class DualLensRecorder: NSObject {
         guard let rawPixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
         // ── Orientation ──────────────────────────────────────────────────────────────
-        // The ultrawide recording connection is set to .landscapeRight, which delivers
-        // native-landscape 1920×1080 frames.  However, setting the WIDE recording
-        // connection to .landscapeRight (required so we can rotate portrait frames
-        // ourselves with CW90) causes MultiCam ISP crosstalk: the ultrawide output
-        // ends up horizontally flipped relative to its original orientation.
+        // The ultrawide recording connection delivers native-landscape 1920×1080 frames
+        // (.landscapeRight) with the scene rotated 90° — a standing person lies on their
+        // side. The phone is held in PORTRAIT, so to produce an UPRIGHT horizontal 16:9
+        // export we must physically rotate the pixels upright FIRST, then centre-crop the
+        // 16:9 region from the upright frame.
         //
-        // Specifically, the person's head moves from LEFT (correct landscape-left) to
-        // RIGHT (mirrored) in the 1920×1080 frame.  We correct this with a single
-        // horizontal flip baked into the cropAndScale render — no extra GPU pass or
-        // intermediate buffer is allocated.
-        let bufW = CVPixelBufferGetWidth(rawPixelBuffer)
-        let bufH = CVPixelBufferGetHeight(rawPixelBuffer)
+        // Why not a writer display-transform (the trick SingleLensRecorder uses)? A
+        // transform rotates the WHOLE frame on playback, which would turn this into a
+        // vertical 1080×1920 display. Physically rotating the pixels is the only way to
+        // keep an upright subject inside a genuinely horizontal frame.
+        //
+        // rotatedCW90 matches processPortraitFrame (same rear sensor, same .landscapeRight
+        // source), so the subject ends up upright. If the export ever appears upside-down,
+        // swap rotatedCW90 → rotatedCCW90 on the line below — nothing else changes.
+        //
+        // Framing note: from a portrait hold the 16:9 result is necessarily a centre crop
+        // of the ultrawide frame (top/bottom trimmed). At 1080p the crop upscales ~1.78×;
+        // recording in 4K eliminates the upscale and keeps the landscape export sharp.
+        guard let uprightBuffer = videoProcessor.rotatedCW90(rawPixelBuffer) else { return }
 
         if !hasLoggedLandscapeBufferInfo {
             hasLoggedLandscapeBufferInfo = true
-            print("🎥 DualLensRecorder [LANDSCAPE/ULTRAWIDE] first frame: \(bufW)×\(bufH) — " +
-                  (bufW >= bufH ? "LANDSCAPE ✓ (applying H-flip to correct ISP crosstalk)" :
-                                  "PORTRAIT ⚠️ (unexpected — check connection .videoOrientation)"))
+            let rawW = CVPixelBufferGetWidth(rawPixelBuffer)
+            let rawH = CVPixelBufferGetHeight(rawPixelBuffer)
+            print("🎥 DualLensRecorder [LANDSCAPE/ULTRAWIDE] first frame: \(rawW)×\(rawH) → " +
+                  "rotated upright \(CVPixelBufferGetWidth(uprightBuffer))×\(CVPixelBufferGetHeight(uprightBuffer)) → centre-crop 16:9")
         }
 
         let dims = settings.resolution.landscapeDimensions
 
         guard let croppedBuffer = videoProcessor.cropAndScale(
-            pixelBuffer: rawPixelBuffer, toWidth: dims.width, toHeight: dims.height,
+            pixelBuffer: uprightBuffer, toWidth: dims.width, toHeight: dims.height,
             pool: landscapePool
         ) else { return }
 
