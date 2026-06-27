@@ -1,50 +1,5 @@
 import SwiftUI
 
-// MARK: - Lens Mode Card
-
-private struct LensModeCard: View {
-    let title: String
-    let rows: [(String, String)]
-    let isSelected: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.subheadline)
-                .fontWeight(.semibold)
-                .foregroundColor(.primary)
-
-            ForEach(rows.indices, id: \.self) { i in
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(rows[i].0)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text(rows[i].1)
-                        .font(.caption)
-                        .foregroundColor(.primary)
-                }
-            }
-
-            Spacer(minLength: 0)
-
-            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                .foregroundColor(isSelected ? .blue : Color(.systemGray3))
-                .frame(maxWidth: .infinity, alignment: .trailing)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, minHeight: 110, alignment: .topLeading)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(isSelected ? Color.blue.opacity(0.08) : Color(.systemGray6))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(isSelected ? Color.blue.opacity(0.5) : Color.clear, lineWidth: 1.5)
-        )
-        .contentShape(Rectangle())
-    }
-}
-
 // MARK: - Settings Sheet
 
 struct SettingsSheet: View {
@@ -53,13 +8,6 @@ struct SettingsSheet: View {
     @Environment(\.openURL) private var openURL
 
     // MARK: - Computed helpers
-
-    private var wideIsPortraitBinding: Binding<Bool> {
-        Binding(
-            get: { settings.cameraAssignment == .widePortrait },
-            set: { settings.cameraAssignment = $0 ? .widePortrait : .wideLeftLandscape }
-        )
-    }
 
     private var storageSummary: String {
         let mbPerMin = StorageCalculator.totalMBPerMinute(
@@ -192,48 +140,6 @@ struct SettingsSheet: View {
                     }
                 }
 
-                // MARK: Lens
-                Section {
-                    HStack(spacing: 12) {
-                        LensModeCard(
-                            title: "Dual Lens",
-                            rows: [
-                                ("Portrait:", wideIsPortraitBinding.wrappedValue ? "Wide (1×)" : "Ultra-wide (0.5×)"),
-                                ("Landscape:", wideIsPortraitBinding.wrappedValue ? "Ultra-wide (0.5×)" : "Wide (1×)")
-                            ],
-                            isSelected: !settings.isSingleLensMode
-                        )
-                        .onTapGesture { settings.isSingleLensMode = false }
-
-                        LensModeCard(
-                            title: "Single Lens",
-                            rows: [
-                                ("Portrait /", "Wide (1×)"),
-                                ("Landscape:", "Wide (1×)")
-                            ],
-                            isSelected: settings.isSingleLensMode
-                        )
-                        .onTapGesture { settings.isSingleLensMode = true }
-                    }
-                    .padding(.vertical, 4)
-
-                    if !settings.isSingleLensMode {
-                        Toggle(isOn: wideIsPortraitBinding) {
-                            Text("Swap portrait / landscape lenses")
-                                .foregroundColor(.secondary)
-                                .font(.subheadline)
-                        }
-                    }
-                } header: {
-                    Text("Lens")
-                } footer: {
-                    if settings.isSingleLensMode {
-                        Text("Records portrait (9:16) and landscape (16:9) simultaneously from the Wide (1×) rear camera.")
-                    } else {
-                        Text("Both rear cameras record simultaneously. Toggle to swap which lens goes to portrait vs. landscape.")
-                    }
-                }
-
                 // MARK: Viewfinder
                 Section {
                     Toggle(isOn: $settings.showGrid) {
@@ -254,20 +160,6 @@ struct SettingsSheet: View {
                     }
                 } header: {
                     Text("Viewfinder")
-                }
-
-                // MARK: Color Profile
-                Section {
-                    Toggle(isOn: $settings.appleLog) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("Apple Log")
-                            Text("Flat, wide dynamic range profile built for color grading")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                    }
-                } header: {
-                    Text("Color Profile")
                 }
 
                 // MARK: Preferences

@@ -110,7 +110,7 @@ struct RecordingView: View {
     private let thumbH: CGFloat = 116
     private let thumbPad: CGFloat = 16      // padding from screen edges
     private let thumbTopInset: CGFloat = 70 // clear the top bar
-    private let thumbBottomInset: CGFloat = 220 // clear record button + mode selector
+    private let thumbBottomInset: CGFloat = 175 // sits just above the record button
 
     // MARK: - Preview Layer Routing
     // Wide is always previewLayer, ultra-wide is always secondaryPreviewLayer.
@@ -118,7 +118,7 @@ struct RecordingView: View {
     // so the viewfinder matches what will actually be recorded.
 
     private var isDualRearMode: Bool {
-        !settings.isSingleLensMode && !settings.dualLensUseFrontCamera
+        !settings.isSingleLensMode && !settings.isFrontBackMode && !settings.dualLensUseFrontCamera
     }
 
     private var mainPreviewLayer: AVCaptureVideoPreviewLayer? {
@@ -180,7 +180,12 @@ struct RecordingView: View {
                 // rate-limiting needed on our side.
                 #if !DEBUG
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                    requestReview()
+                    // Never interrupt an in-progress recording with the rating prompt.
+                    // (The user can stop+save, then immediately start a new take within
+                    // this 1s window — guard against showing the sheet mid-record.)
+                    if !cameraManager.isRecording {
+                        requestReview()
+                    }
                 }
                 #endif
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
@@ -266,43 +271,18 @@ struct RecordingView: View {
                 // Single Lens framing guide — only visible in Single Lens rear-camera mode.
                 // Dims the portrait-only regions and draws a border around the landscape
                 // (16:9) center strip so the user can frame both outputs simultaneously.
-                if settings.isSingleLensMode && !settings.dualLensUseFrontCamera {
+                if settings.isSingleLensMode {
                     singleLensFramingOverlay(in: geo)
                 }
 
                 // PiP thumbnail — draggable, snaps to corners
                 pipThumbnail(in: geo)
 
-                // UI overlay — top bar + record button + mode selector
+                // UI overlay — top bar + record row + bottom bar
                 VStack {
                     topBar
                     Spacer()
-                    Group {
-                        if cameraManager.isRecording {
-                            RecordButton(isRecording: true) { cameraManager.stopRecording() }
-                        } else {
-                            RecordButton(isRecording: false) {
-                                if settings.resolution == .uhd4K && isDualRearMode {
-                                    showUnsupportedAlert = true
-                                } else {
-                                    cameraManager.startRecording()
-                                }
-                            }
-                        }
-                    }
-                    .alert("Unsupported Setting", isPresented: $showUnsupportedAlert) {
-                        Button("Open Settings") { showSettings = true }
-                        Button("Cancel", role: .cancel) { }
-                    } message: {
-                        Text("4K is not supported in Dual Lens mode. Use 1080p for Dual Lens recording.")
-                    }
-                    .padding(.bottom, 12)
-                    // Mode selector fades out while recording so layout stays stable
-                    // (record button doesn't shift when recording starts/stops).
-                    modeSelector
-                        .opacity(cameraManager.isRecording ? 0 : 1)
-                        .animation(.easeInOut(duration: 0.2), value: cameraManager.isRecording)
-                        .padding(.bottom, 32)
+                    bottomControls
                 }
 
                 // Pause / resume — bottom-left while recording
@@ -422,12 +402,21 @@ struct RecordingView: View {
 
     @ViewBuilder
     private func pipThumbnail(in geo: GeometryProxy) -> some View {
-        let defaultPos = CGPoint(
-            x: geo.size.width / 2,
-            y: geo.size.height - thumbH / 2 - thumbBottomInset
-        )
-        let base = thumbnailPosition ?? defaultPos
-        let display = CGPoint(
+        // Front/Back uses a portrait-shaped PiP pinned to the top-right (matches the
+        // composited export). Other modes keep the landscape PiP centered above the controls.
+        let isFB = settings.isFrontBackMode
+        let pipW: CGFloat = isFB ? 116 : thumbW
+        let pipH: CGFloat = isFB ? 206 : thumbH   // portrait 9:16
+        let defaultPos: CGPoint = isFB
+            ? CGPoint(x: geo.size.width - pipW / 2 - 14,
+                      y: pipH / 2 + 64)
+            : CGPoint(x: geo.size.width / 2,
+                      y: geo.size.height - thumbH / 2 - thumbBottomInset)
+        // Front/Back pins the PiP to a fixed top-right slot. It must NOT inherit the
+        // draggable position saved by the (shorter, landscape) PiP in other modes —
+        // that value lands the taller portrait PiP in the corner, clipped off-screen.
+        let base = isFB ? defaultPos : (thumbnailPosition ?? defaultPos)
+        let display = isFB ? base : CGPoint(
             x: base.x + thumbnailDragOffset.width,
             y: base.y + thumbnailDragOffset.height
         )
@@ -436,7 +425,7 @@ struct RecordingView: View {
             if let secondaryLayer = pipPreviewLayer {
                 // Dual lens: secondary preview layer (respects camera assignment swap)
                 CameraPreviewContainer(previewLayer: secondaryLayer)
-                    .frame(width: thumbW, height: thumbH)
+                    .frame(width: pipW, height: pipH)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .overlay(
                         RoundedRectangle(cornerRadius: 12)
@@ -463,10 +452,9 @@ struct RecordingView: View {
                                 settings.savedThumbnailPosition = snapped
                             }
                     )
-            } else if settings.dualLensUseFrontCamera {
-                // Front camera only: FrontCameraPipImage observes pipModel independently
-                // so only this small view re-renders per frame, not all of RecordingView.
-                // Single-lens rear mode has no secondary feed — no PiP is shown there.
+            } else if settings.dualLensUseFrontCamera && !settings.isSingleLensMode {
+                // Dual mode flipped to front: front fullscreen + generated PiP (wide FOV).
+                // (Single-lens front uses the crop + framing guide instead — no PiP.)
                 FrontCameraPipImage(
                     pipModel: cameraManager.pipModel,
                     thumbW: thumbW,
@@ -515,76 +503,48 @@ struct RecordingView: View {
 
     private var topBar: some View {
         HStack(alignment: .center) {
-            // Left: torch button + elapsed timer while recording
-            HStack(spacing: 8) {
-                if !settings.dualLensUseFrontCamera {
-                    Button {
-                        let newMode: TorchMode = settings.torchMode == .off ? .on : .off
-                        settings.torchMode = newMode
-                        cameraManager.setTorch(newMode)
-                    } label: {
-                        Image(systemName: settings.torchMode.systemImage)
-                            .font(.system(size: 20))
-                            .foregroundColor(settings.torchMode == .on ? .yellow : .white)
-                            .frame(width: 44, height: 44)
-                    }
-                } else {
-                    // Placeholder so the timer still left-aligns consistently
-                    Spacer().frame(width: 44, height: 44)
+            // Left: resolution/fps pill (idle) → opens Settings; recording timer while recording
+            if cameraManager.isRecording {
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(cameraManager.isPaused ? Color.yellow : Color.red)
+                        .frame(width: 8, height: 8)
+                    Text(formattedDuration(cameraManager.recordingDuration))
+                        .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                        .foregroundColor(cameraManager.isPaused ? .yellow : .red)
                 }
-
-                if cameraManager.isRecording {
-                    HStack(spacing: 5) {
-                        Circle()
-                            .fill(cameraManager.isPaused ? Color.yellow : Color.red)
-                            .frame(width: 8, height: 8)
-                        Text(formattedDuration(cameraManager.recordingDuration))
-                            .font(.system(size: 16, weight: .semibold, design: .monospaced))
-                            .foregroundColor(cameraManager.isPaused ? .yellow : .red)
-                    }
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(Color.black.opacity(0.35))
-                    .clipShape(Capsule())
-                    .transition(.opacity)
-                    .animation(.easeInOut(duration: 0.2), value: cameraManager.isPaused)
-                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Capsule().fill(Color.black.opacity(0.45)))
+                .transition(.opacity)
+                .animation(.easeInOut(duration: 0.2), value: cameraManager.isPaused)
+            } else {
+                resolutionPill
             }
 
             Spacer()
 
-            // Right: lens switcher (dual rear only) + camera roll + gear — hidden while recording
+            // Right: flash + settings — hidden while recording
             if !cameraManager.isRecording {
-                HStack(spacing: 0) {
-                    // Lens assignment toggle — swaps which camera feeds portrait vs landscape.
-                    // Only meaningful (and shown) in dual rear mode.
-                    if isDualRearMode {
-                        Button { toggleLensAssignment() } label: {
-                            Image(systemName: "rectangle.2.swap")
+                HStack(spacing: 22) {
+                    // Flash / torch — only meaningful on the rear camera (hidden when flipped to front)
+                    if !settings.dualLensUseFrontCamera {
+                        Button {
+                            let newMode: TorchMode = settings.torchMode == .off ? .on : .off
+                            settings.torchMode = newMode
+                            cameraManager.setTorch(newMode)
+                        } label: {
+                            Image(systemName: settings.torchMode == .on ? "bolt.fill" : "bolt.slash.fill")
                                 .font(.system(size: 20))
-                                .foregroundColor(.white)
-                                .frame(width: 36, height: 44)
+                                .foregroundColor(settings.torchMode == .on ? .yellow : .white)
                         }
                     }
 
-                    Button {
-                        if let url = URL(string: "photos-redirect://") {
-                            UIApplication.shared.open(url)
-                        }
-                    } label: {
-                        Image(systemName: "photo.stack")
-                            .font(.system(size: 20))
-                            .foregroundColor(.white)
-                            .frame(width: 36, height: 44)
-                    }
-
-                    Button {
-                        showSettings = true
-                    } label: {
+                    // Settings (full sheet)
+                    Button { showSettings = true } label: {
                         Image(systemName: "gearshape.fill")
                             .font(.system(size: 20))
                             .foregroundColor(.white)
-                            .frame(width: 36, height: 44)
                     }
                     .sheet(isPresented: $showSettings, onDismiss: {
                         cameraManager.reconfigure(with: settings)
@@ -593,11 +553,36 @@ struct RecordingView: View {
                             .presentationDetents([.medium, .large])
                     }
                 }
+                .frame(height: 44)
             }
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 16)
         .padding(.top, 8)
         .animation(.easeInOut(duration: 0.2), value: cameraManager.isRecording)
+    }
+
+    /// Compact "1080p RES | 30 FPS" pill shown top-left. Tapping opens Settings.
+    private var resolutionPill: some View {
+        HStack(spacing: 5) {
+            Text(settings.resolution.rawValue)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.white)
+            Text("RES")
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundColor(.white.opacity(0.55))
+            Rectangle()
+                .fill(Color.white.opacity(0.3))
+                .frame(width: 1, height: 11)
+            Text("\(settings.frameRate.rawValue)")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.white)
+            Text("FPS")
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundColor(.white.opacity(0.55))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Capsule().fill(Color.black.opacity(0.45)))
     }
 
     // MARK: - Capture Mode
@@ -609,8 +594,8 @@ struct RecordingView: View {
     }
 
     private var currentCaptureMode: CaptureMode {
-        if settings.dualLensUseFrontCamera { return .frontBack }
-        if settings.isSingleLensMode       { return .single }
+        if settings.isFrontBackMode  { return .frontBack }
+        if settings.isSingleLensMode { return .single }
         return .dual
     }
 
@@ -621,17 +606,38 @@ struct RecordingView: View {
         settings.torchMode = .off
         thumbnailPosition = nil
         settings.savedThumbnailPosition = nil
+        // Every mode (re)enters on the rear camera — clear any prior front flip.
+        settings.dualLensUseFrontCamera = false
         switch mode {
         case .dual:
-            settings.isSingleLensMode       = false
-            settings.dualLensUseFrontCamera = false
+            settings.isSingleLensMode = false
+            settings.isFrontBackMode  = false
         case .single:
-            settings.isSingleLensMode       = true
-            settings.dualLensUseFrontCamera = false
+            settings.isSingleLensMode = true
+            settings.isFrontBackMode  = false
         case .frontBack:
-            settings.isSingleLensMode       = false
-            settings.dualLensUseFrontCamera = true
+            settings.isSingleLensMode = false
+            settings.isFrontBackMode  = true
         }
+        cameraManager.reconfigure(with: settings)
+    }
+
+    /// Flips the active capture between the rear and front camera.
+    /// Drives the `dualLensUseFrontCamera` flag, which the session router honors for
+    /// Dual and Single modes (configureFrontCameraSession). No-op while recording, and
+    /// ignored in Front/Back mode (which already runs front + rear simultaneously).
+    private func flipCamera() {
+        // Front/Back: swap which camera is fullscreen vs PiP. This is a live composite
+        // change (no session rebuild), so it's allowed even mid-recording.
+        if settings.isFrontBackMode {
+            cameraManager.swapFrontBackMain()
+            return
+        }
+        // Dual/Single: flip to the front camera — needs a session reconfigure, so it's
+        // only allowed when not recording.
+        guard !cameraManager.isRecording else { return }
+        settings.torchMode = .off
+        settings.dualLensUseFrontCamera.toggle()
         cameraManager.reconfigure(with: settings)
     }
 
@@ -660,6 +666,111 @@ struct RecordingView: View {
     private func formattedDuration(_ duration: TimeInterval) -> String {
         let s = Int(duration)
         return String(format: "%02d:%02d", s / 60, s % 60)
+    }
+
+    // MARK: - Bottom Controls
+
+    /// The full bottom control stack: the record row (with the lens/zoom toggle) and,
+    /// below it, the action bar (gallery · mode selector · flip-camera).
+    /// The action bar fades out while recording so the record button never shifts.
+    private var bottomControls: some View {
+        // Two independent layers, both pinned to the bottom:
+        //  • Side controls (gallery/lens toggle on the left, flip on the right) in the corners
+        //  • A centered column with the record button directly above the mode pill
+        // Keeping them separate means the side buttons' heights never push the record
+        // button up — it stays low, just above the mode pill, in every mode.
+        ZStack(alignment: .bottom) {
+            HStack(alignment: .bottom) {
+                VStack(spacing: 10) {
+                    if isDualRearMode { lensZoomToggle }
+                    galleryButton
+                }
+                .opacity(cameraManager.isRecording ? 0 : 1)
+
+                Spacer()
+
+                // Flip stays available while recording in Front/Back (live main/PiP swap);
+                // in other modes it hides during recording (it would need a session rebuild).
+                if !cameraManager.isRecording || settings.isFrontBackMode {
+                    flipCameraButton
+                } else {
+                    Color.clear.frame(width: 48, height: 48)
+                }
+            }
+            .padding(.horizontal, 16)
+
+            VStack(spacing: 16) {
+                recordButton
+                // Reserve the mode pill's space while recording so the record button
+                // never shifts when the pill fades out.
+                modeSelector
+                    .opacity(cameraManager.isRecording ? 0 : 1)
+            }
+        }
+        .padding(.bottom, 28)
+        .animation(.easeInOut(duration: 0.2), value: cameraManager.isRecording)
+    }
+
+    /// The record / stop button plus its 4K-in-dual guard alert.
+    private var recordButton: some View {
+        Group {
+            if cameraManager.isRecording {
+                RecordButton(isRecording: true) { cameraManager.stopRecording() }
+            } else {
+                RecordButton(isRecording: false) {
+                    if settings.resolution == .uhd4K && isDualRearMode {
+                        showUnsupportedAlert = true
+                    } else {
+                        cameraManager.startRecording()
+                    }
+                }
+            }
+        }
+        .alert("Unsupported Setting", isPresented: $showUnsupportedAlert) {
+            Button("Open Settings") { showSettings = true }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("4K is not supported in Dual Lens mode. Use 1080p for Dual Lens recording.")
+        }
+    }
+
+    /// Two-stop lens toggle (0.5× ultrawide ⇄ 1× wide). Tapping swaps which rear lens
+    /// records portrait vs landscape — drives the existing swapDualLensAssignment().
+    /// Only shown in dual rear mode.
+    private var lensZoomToggle: some View {
+        Button { toggleLensAssignment() } label: {
+            Text(settings.cameraAssignment.wideIsPortrait ? "1×" : "0.5×")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(.white)
+                .frame(width: 48, height: 48)
+                .background(Circle().fill(Color.black.opacity(0.45)))
+        }
+    }
+
+    /// Opens the Photos app to the user's camera roll.
+    private var galleryButton: some View {
+        Button {
+            if let url = URL(string: "photos-redirect://") {
+                UIApplication.shared.open(url)
+            }
+        } label: {
+            Image(systemName: "photo.stack")
+                .font(.system(size: 18))
+                .foregroundColor(.white)
+                .frame(width: 48, height: 48)
+                .background(Circle().fill(Color.black.opacity(0.45)))
+        }
+    }
+
+    /// Flips the active capture to the front camera (Dual/Single modes) and back.
+    private var flipCameraButton: some View {
+        Button { flipCamera() } label: {
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundColor(.white)
+                .frame(width: 48, height: 48)
+                .background(Circle().fill(Color.black.opacity(0.45)))
+        }
     }
 
     // MARK: - Mode Selector
@@ -700,7 +811,7 @@ struct RecordingView: View {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundColor(.green)
                     .font(.system(size: 22))
-                Text("2 VIDEOS SAVED TO PHOTOS")
+                Text(settings.isFrontBackMode ? "VIDEO SAVED TO PHOTOS" : "2 VIDEOS SAVED TO PHOTOS")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(.white)
             }

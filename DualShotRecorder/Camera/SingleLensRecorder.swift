@@ -265,13 +265,16 @@ final class SingleLensRecorder: NSObject {
             lVideoInput.expectsMediaDataInRealTime = true
 
             // When using native landscape output (front camera dual-output path), the raw
-            // .landscapeRight frames arrive with the person rotated 90° CW (head on right).
-            // Rather than paying the cost of rotating every pixel buffer, we set a display
-            // transform on the writer input.  Media players (iOS Photos, QuickTime, etc.)
-            // read this transform and rotate the video CCW90 on playback so the person
-            // appears upright — exactly the same mechanism iOS uses for selfie portrait videos.
+            // .landscapeRight frames arrive with the person rotated 90°. We set a display
+            // transform on the writer input so players rotate the video upright on playback
+            // (the same mechanism iOS uses for selfie videos), avoiding a per-frame rotate.
+            //
+            // NOTE: the writer's transform coordinate space is the OPPOSITE handedness from
+            // the CIImage rotation used to build the PiP preview — so where the PiP uses
+            // +.pi/2, the writer needs -.pi/2 to land right-side up. Using +.pi/2 here is
+            // what produced the upside-down second export.
             if nativeLandscapeOutput != nil {
-                lVideoInput.transform = CGAffineTransform(rotationAngle: .pi / 2)
+                lVideoInput.transform = CGAffineTransform(rotationAngle: -.pi / 2)
             }
 
             let lAudioInput = AVAssetWriterInput(mediaType: .audio, outputSettings: settings.audioSettings)

@@ -1,68 +1,69 @@
 import AVFoundation
 import CoreVideo
+import CoreImage
+import UIKit
 
-/// Records two simultaneous portrait videos — one from the front camera and one from
-/// the rear camera — using AVCaptureMultiCamSession.
+/// Records Front/Back mode as a SINGLE composited portrait video.
 ///
-/// Both outputs are portrait (9:16). The front camera is the "primary" output;
-/// the rear camera is the "secondary" output.  Audio is written to both files.
+/// The "main" camera fills the 9:16 canvas and the other camera is rendered as a
+/// rounded picture-in-picture in the top-right corner (Apple multicam-PiP style).
+/// Front is main by default; the main/PiP roles can be swapped LIVE at any time —
+/// including mid-recording — via `setMainIsFront(_:)`.
+///
+/// The front camera's frames drive the output cadence; the most recent rear frame is
+/// cached and composited into each output frame. One AVAssetWriter → one file.
 final class FrontBackRecorder: NSObject {
 
-    // MARK: - Properties
+    // MARK: - Dependencies
 
     private let settings: RecordingSettings
     private let videoProcessor: VideoProcessor
     private let audioManager: AudioManager
 
-    // Writers
-    private var frontWriter: AVAssetWriter?
-    private var rearWriter:  AVAssetWriter?
-    private var frontVideoInput: AVAssetWriterInput?
-    private var rearVideoInput:  AVAssetWriterInput?
-    private var frontAudioInput: AVAssetWriterInput?
-    private var rearAudioInput:  AVAssetWriterInput?
-    private var frontAdaptor: AVAssetWriterInputPixelBufferAdaptor?
-    private var rearAdaptor:  AVAssetWriterInputPixelBufferAdaptor?
+    // MARK: - Single Writer
 
-    // File URLs
-    private var frontURL: URL?
-    private var rearURL:  URL?
+    private var writer: AVAssetWriter?
+    private var videoInput: AVAssetWriterInput?
+    private var audioInput: AVAssetWriterInput?
+    private var adaptor: AVAssetWriterInputPixelBufferAdaptor?
+    private var url: URL?
 
-    // Pixel buffer pools
-    private var frontPool: CVPixelBufferPool?
-    private var rearPool:  CVPixelBufferPool?
+    // Pools
+    private var compositePool: CVPixelBufferPool?
+    private var frontNormPool: CVPixelBufferPool?
+    private var rearNormPool:  CVPixelBufferPool?
 
-    // Pending frames (back-pressure buffer while encoder catches up)
-    private var frontPendingFrames: [(CVPixelBuffer, CMTime)] = []
-    private var rearPendingFrames:  [(CVPixelBuffer, CMTime)] = []
+    private var pendingFrames: [(CVPixelBuffer, CMTime)] = []
 
-    // Queues
-    private let frontVideoQueue = DispatchQueue(label: "com.evershot.frontback.front.video", qos: .userInitiated)
-    private let rearVideoQueue  = DispatchQueue(label: "com.evershot.frontback.rear.video",  qos: .userInitiated)
-    private let writerQueue     = DispatchQueue(label: "com.evershot.frontback.writer",      qos: .userInitiated)
+    // MARK: - Queues
 
-    // State
-    private var isRecording    = false
+    private let frontVideoQueue = DispatchQueue(label: "com.evershot.fb.front.video", qos: .userInitiated)
+    private let rearVideoQueue  = DispatchQueue(label: "com.evershot.fb.rear.video",  qos: .userInitiated)
+    private let writerQueue     = DispatchQueue(label: "com.evershot.fb.writer",      qos: .userInitiated)
+
+    // Latest rear frame (normalized portrait full) — produced on the rear queue,
+    // consumed on the front (driver) queue. Guarded by a small lock.
+    private let rearLock = NSLock()
+    private var latestRearBuffer: CVPixelBuffer?
+
+    /// Which camera is fullscreen. true = front main / rear PiP. Bool reads/writes are
+    /// atomic on ARM64; at worst one frame around a live swap uses the previous role,
+    /// which is imperceptible.
+    private var _mainIsFront = true
+    func setMainIsFront(_ value: Bool) { _mainIsFront = value }
+
+    // MARK: - State
+
+    private var isRecording = false
     private var sessionStarted = false
     private var sessionStartTimestamp: CMTime = .invalid
 
-    // Per-writer session state (mirrors DualLensRecorder pattern)
-    private var frontSessionStarted:   Bool   = false
-    private var rearSessionStarted:    Bool   = false
-    private var frontSessionTimestamp: CMTime = .invalid
-    private var rearSessionTimestamp:  CMTime = .invalid
-
-    // Pause state — wall-clock based, checked without queue sync in captureOutput
-    private var isPaused:      Bool   = false
+    // Pause (wall-clock based)
+    private var isPaused = false
     private var pauseWallStart: Double = 0
-    private var pauseOffset:   CMTime = .zero
+    private var pauseOffset: CMTime = .zero
 
-    // MARK: - AEC Stabilisation Gate
-    //
-    // Same three-layer defence as DualLensRecorder:
-    // 1. KVO gate  — defer startWriting() until both cameras are AEC-stable
-    // 2. Exposure lock — lock both cameras simultaneously
-    // 3. Frame skip — discard kLeadingFrameSkipCount frames already in pipeline
+    // MARK: - AEC stabilisation gate (mirrors DualLensRecorder)
 
     private static let kLeadingFrameSkipCount = 5
 
@@ -70,31 +71,30 @@ final class FrontBackRecorder: NSObject {
     private var frontExposureObservation: NSKeyValueObservation?
     private var rearExposureObservation:  NSKeyValueObservation?
     private var stabilizationTimeoutItem: DispatchWorkItem?
-
     private var frontDeviceForLock: AVCaptureDevice?
     private var rearDeviceForLock:  AVCaptureDevice?
     private var exposureUnlockItem: DispatchWorkItem?
+    private var leadFrameCount = 0
 
-    private var frontLeadFrameCount = 0
-    private var rearLeadFrameCount  = 0
+    private var hasLoggedInfo = false
 
-    // Timelapse counters
-    private var frontTotalFrames   = 0
-    private var rearTotalFrames    = 0
-    private var frontWrittenFrames = 0
-    private var rearWrittenFrames  = 0
+    // MARK: - PiP geometry / cached overlays (built in setupWriter)
 
-    // Diagnostic: log buffer dims once per session
-    private var hasLoggedFrontBufferInfo = false
-    private var hasLoggedRearBufferInfo  = false
+    private var pipRect: CGRect = .zero
+    private var pipMaskImage: CIImage?     // white rounded rect (alpha mask), translated to pipRect
+    private var pipBorderImage: CIImage?   // white rounded stroke, translated to pipRect
 
-    // Outputs
+    // MARK: - Outputs
+
     private var frontOutput: AVCaptureVideoDataOutput?
     private var rearOutput:  AVCaptureVideoDataOutput?
 
-    // Completion handlers
-    private var completionHandler: ((URL, URL) -> Void)?
+    // MARK: - Completion
+
+    private var completionHandler: ((URL) -> Void)?
     private var errorHandler: ((String) -> Void)?
+
+    private let deviceRGB = CGColorSpaceCreateDeviceRGB()
 
     // MARK: - Init
 
@@ -119,50 +119,34 @@ final class FrontBackRecorder: NSObject {
     func startRecording(frontDevice: AVCaptureDevice?, rearDevice: AVCaptureDevice?) {
         writerQueue.async { [weak self] in
             guard let self = self else { return }
-            self.setupWriters()
+            self.setupWriter()
             self.setupAudioCallback()
 
-            self.isRecording          = true
-            self.sessionStarted       = false
+            self.isRecording           = true
+            self.sessionStarted        = false
             self.sessionStartTimestamp = .invalid
-            self.frontSessionStarted  = false
-            self.rearSessionStarted   = false
-            self.frontSessionTimestamp = .invalid
-            self.rearSessionTimestamp  = .invalid
-            self.cameraStabilized     = false
-            self.frontDeviceForLock   = frontDevice
-            self.rearDeviceForLock    = rearDevice
-            self.frontLeadFrameCount  = 0
-            self.rearLeadFrameCount   = 0
-            self.frontTotalFrames     = 0
-            self.rearTotalFrames      = 0
-            self.frontWrittenFrames   = 0
-            self.rearWrittenFrames    = 0
-            self.frontPendingFrames.removeAll()
-            self.rearPendingFrames.removeAll()
+            self.cameraStabilized      = false
+            self.frontDeviceForLock    = frontDevice
+            self.rearDeviceForLock     = rearDevice
+            self.leadFrameCount        = 0
+            self.pendingFrames.removeAll()
             self.isPaused       = false
             self.pauseWallStart = 0
             self.pauseOffset    = .zero
-            self.hasLoggedFrontBufferInfo = false
-            self.hasLoggedRearBufferInfo  = false
+            self.hasLoggedInfo  = false
+            self.rearLock.lock(); self.latestRearBuffer = nil; self.rearLock.unlock()
 
             let checkBothStable = { [weak self] in
-                let frontStable = frontDevice.map { !$0.isAdjustingExposure } ?? true
-                let rearStable  = rearDevice.map  { !$0.isAdjustingExposure } ?? true
-                if frontStable && rearStable { self?.triggerWriterStart() }
+                let fStable = frontDevice.map { !$0.isAdjustingExposure } ?? true
+                let rStable = rearDevice.map  { !$0.isAdjustingExposure } ?? true
+                if fStable && rStable { self?.triggerWriterStart() }
             }
-
             if let fd = frontDevice {
-                self.frontExposureObservation = fd.observe(
-                    \.isAdjustingExposure, options: [.initial, .new]
-                ) { _, _ in checkBothStable() }
+                self.frontExposureObservation = fd.observe(\.isAdjustingExposure, options: [.initial, .new]) { _, _ in checkBothStable() }
             }
             if let rd = rearDevice {
-                self.rearExposureObservation = rd.observe(
-                    \.isAdjustingExposure, options: [.initial, .new]
-                ) { _, _ in checkBothStable() }
+                self.rearExposureObservation = rd.observe(\.isAdjustingExposure, options: [.initial, .new]) { _, _ in checkBothStable() }
             }
-
             let timeout = DispatchWorkItem { [weak self] in self?.triggerWriterStart() }
             self.stabilizationTimeoutItem = timeout
             DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 2.0, execute: timeout)
@@ -172,7 +156,6 @@ final class FrontBackRecorder: NSObject {
     private func triggerWriterStart() {
         writerQueue.async { [weak self] in
             guard let self = self, self.isRecording, !self.cameraStabilized else { return }
-
             self.frontExposureObservation = nil
             self.rearExposureObservation  = nil
             self.stabilizationTimeoutItem?.cancel()
@@ -183,21 +166,18 @@ final class FrontBackRecorder: NSObject {
                     try device.lockForConfiguration()
                     if device.isExposureModeSupported(.locked) { device.exposureMode = .locked }
                     device.unlockForConfiguration()
-                } catch {
-                    print("FrontBackRecorder: Could not lock exposure on \(device.localizedName): \(error)")
-                }
+                } catch { print("FrontBackRecorder: Could not lock exposure on \(device.localizedName): \(error)") }
             }
 
-            self.frontWriter?.startWriting()
-            self.rearWriter?.startWriting()
+            self.writer?.startWriting()
             self.cameraStabilized = true
 
-            let unlockItem = DispatchWorkItem { [weak self] in
+            let unlock = DispatchWorkItem { [weak self] in
                 guard let self = self else { return }
                 self.writerQueue.async { self.unlockExposure() }
             }
-            self.exposureUnlockItem = unlockItem
-            DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 3.0, execute: unlockItem)
+            self.exposureUnlockItem = unlock
+            DispatchQueue.global(qos: .background).asyncAfter(deadline: .now() + 3.0, execute: unlock)
         }
     }
 
@@ -205,20 +185,16 @@ final class FrontBackRecorder: NSObject {
         for device in [frontDeviceForLock, rearDeviceForLock].compactMap({ $0 }) {
             do {
                 try device.lockForConfiguration()
-                if device.isExposureModeSupported(.continuousAutoExposure) {
-                    device.exposureMode = .continuousAutoExposure
-                }
+                if device.isExposureModeSupported(.continuousAutoExposure) { device.exposureMode = .continuousAutoExposure }
                 device.unlockForConfiguration()
-            } catch {
-                print("FrontBackRecorder: Could not unlock exposure on \(device.localizedName): \(error)")
-            }
+            } catch { print("FrontBackRecorder: Could not unlock exposure on \(device.localizedName): \(error)") }
         }
         frontDeviceForLock = nil
         rearDeviceForLock  = nil
         exposureUnlockItem = nil
     }
 
-    func stopRecording(completion: @escaping (URL, URL) -> Void, error: @escaping (String) -> Void) {
+    func stopRecording(completion: @escaping (URL) -> Void, error: @escaping (String) -> Void) {
         writerQueue.async { [weak self] in
             guard let self = self else { return }
             self.isRecording = false
@@ -241,283 +217,240 @@ final class FrontBackRecorder: NSObject {
     func resume() {
         writerQueue.async { [weak self] in
             guard let self = self, self.isRecording, self.isPaused else { return }
-            let pausedSeconds = CACurrentMediaTime() - self.pauseWallStart
-            self.pauseOffset = CMTimeAdd(
-                self.pauseOffset,
-                CMTime(seconds: pausedSeconds, preferredTimescale: 600)
-            )
+            let paused = CACurrentMediaTime() - self.pauseWallStart
+            self.pauseOffset = CMTimeAdd(self.pauseOffset, CMTime(seconds: paused, preferredTimescale: 600))
             self.isPaused = false
         }
     }
 
     // MARK: - Writer Setup
 
-    private func setupWriters() {
-        let fURL = settings.frontFileURL()
-        let rURL = settings.rearFileURL()
-        frontURL = fURL
-        rearURL  = rURL
-
-        let pDims = settings.resolution.portraitDimensions
+    private func setupWriter() {
+        let outURL = settings.frontFileURL()   // reused as the single composite output file
+        url = outURL
+        let dims = settings.resolution.portraitDimensions
 
         do {
-            // Front writer (portrait)
-            let fWriter     = try AVAssetWriter(outputURL: fURL, fileType: settings.fileFormat.fileType)
-            let fVideoInput = AVAssetWriterInput(mediaType: .video, outputSettings: settings.portraitVideoSettings)
-            fVideoInput.expectsMediaDataInRealTime = true
+            let w = try AVAssetWriter(outputURL: outURL, fileType: settings.fileFormat.fileType)
 
-            let fAudioInput = AVAssetWriterInput(mediaType: .audio, outputSettings: settings.audioSettings)
-            fAudioInput.expectsMediaDataInRealTime = true
+            let vInput = AVAssetWriterInput(mediaType: .video, outputSettings: settings.portraitVideoSettings)
+            vInput.expectsMediaDataInRealTime = true
 
-            let fAdaptor = AVAssetWriterInputPixelBufferAdaptor(
-                assetWriterInput: fVideoInput,
+            let aInput = AVAssetWriterInput(mediaType: .audio, outputSettings: settings.audioSettings)
+            aInput.expectsMediaDataInRealTime = true
+
+            let adapt = AVAssetWriterInputPixelBufferAdaptor(
+                assetWriterInput: vInput,
                 sourcePixelBufferAttributes: [
                     kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-                    kCVPixelBufferWidthKey  as String: pDims.width,
-                    kCVPixelBufferHeightKey as String: pDims.height
+                    kCVPixelBufferWidthKey  as String: dims.width,
+                    kCVPixelBufferHeightKey as String: dims.height
                 ]
             )
 
-            if fWriter.canAdd(fVideoInput) { fWriter.add(fVideoInput) }
-            if fWriter.canAdd(fAudioInput) { fWriter.add(fAudioInput) }
+            if w.canAdd(vInput) { w.add(vInput) }
+            if w.canAdd(aInput) { w.add(aInput) }
 
-            frontWriter      = fWriter
-            frontVideoInput  = fVideoInput
-            frontAudioInput  = fAudioInput
-            frontAdaptor     = fAdaptor
+            writer = w
+            videoInput = vInput
+            audioInput = aInput
+            adaptor = adapt
 
-            // Rear writer (also portrait)
-            let rWriter     = try AVAssetWriter(outputURL: rURL, fileType: settings.fileFormat.fileType)
-            let rVideoInput = AVAssetWriterInput(mediaType: .video, outputSettings: settings.portraitVideoSettings)
-            rVideoInput.expectsMediaDataInRealTime = true
+            compositePool = VideoProcessor.createPixelBufferPool(width: dims.width, height: dims.height)
+            frontNormPool = VideoProcessor.createPixelBufferPool(width: dims.width, height: dims.height)
+            rearNormPool  = VideoProcessor.createPixelBufferPool(width: dims.width, height: dims.height)
 
-            let rAudioInput = AVAssetWriterInput(mediaType: .audio, outputSettings: settings.audioSettings)
-            rAudioInput.expectsMediaDataInRealTime = true
-
-            let rAdaptor = AVAssetWriterInputPixelBufferAdaptor(
-                assetWriterInput: rVideoInput,
-                sourcePixelBufferAttributes: [
-                    kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-                    kCVPixelBufferWidthKey  as String: pDims.width,
-                    kCVPixelBufferHeightKey as String: pDims.height
-                ]
-            )
-
-            if rWriter.canAdd(rVideoInput) { rWriter.add(rVideoInput) }
-            if rWriter.canAdd(rAudioInput) { rWriter.add(rAudioInput) }
-
-            rearWriter      = rWriter
-            rearVideoInput  = rVideoInput
-            rearAudioInput  = rAudioInput
-            rearAdaptor     = rAdaptor
-
-            frontPool = VideoProcessor.createPixelBufferPool(width: pDims.width, height: pDims.height)
-            rearPool  = VideoProcessor.createPixelBufferPool(width: pDims.width, height: pDims.height)
+            buildPiPOverlays(canvasW: dims.width, canvasH: dims.height)
 
         } catch {
-            print("FrontBackRecorder: Failed to create writers: \(error)")
+            print("FrontBackRecorder: Failed to create writer: \(error)")
         }
     }
 
     private func setupAudioCallback() {
         audioManager.onAudioBuffer = { [weak self] sampleBuffer in
             guard let self = self else { return }
-            var shouldAppend = false
-            self.writerQueue.sync {
-                shouldAppend = self.isRecording && !self.isPaused
-                            && self.sessionStarted && !self.settings.isTimelapse
-            }
-            guard shouldAppend else { return }
-
+            var ok = false
+            self.writerQueue.sync { ok = self.isRecording && !self.isPaused && self.sessionStarted }
+            guard ok else { return }
             self.writerQueue.async {
-                let audioPts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+                let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
                 guard CMTIME_IS_VALID(self.sessionStartTimestamp),
-                      CMTimeCompare(audioPts, self.sessionStartTimestamp) >= 0 else { return }
-
-                if let a = self.frontAudioInput, a.isReadyForMoreMediaData, self.frontWriter?.status == .writing { a.append(sampleBuffer) }
-                if let a = self.rearAudioInput,  a.isReadyForMoreMediaData, self.rearWriter?.status  == .writing { a.append(sampleBuffer) }
+                      CMTimeCompare(pts, self.sessionStartTimestamp) >= 0 else { return }
+                if let a = self.audioInput, a.isReadyForMoreMediaData, self.writer?.status == .writing {
+                    a.append(sampleBuffer)
+                }
             }
         }
     }
 
-    // MARK: - Per-Writer Session Management
+    // MARK: - PiP Overlays
 
-    private func startFrontSessionIfNeeded(at timestamp: CMTime) {
-        guard !frontSessionStarted, frontWriter?.status == .writing else { return }
-        frontWriter?.startSession(atSourceTime: timestamp)
-        frontSessionTimestamp = timestamp
-        frontSessionStarted   = true
-        checkBothSessionsStarted()
+    /// Builds the rounded-corner alpha mask and the white border, pre-translated to the
+    /// top-right PiP rect, so each composited frame just reuses them.
+    private func buildPiPOverlays(canvasW: Int, canvasH: Int) {
+        let cw = CGFloat(canvasW), ch = CGFloat(canvasH)
+        let pipW = (cw * 0.32).rounded()
+        let pipH = (pipW * 16.0 / 9.0).rounded()   // portrait PiP (9:16)
+        let pad  = (cw * 0.04).rounded()
+        let originX = cw - pipW - pad
+        let originY = ch - pipH - pad               // CIImage origin is bottom-left → top = high y
+        pipRect = CGRect(x: originX, y: originY, width: pipW, height: pipH)
+
+        let radius = pipW * 0.14
+        let border = max(3.0, pipW * 0.018)
+        let size   = CGSize(width: pipW, height: pipH)
+        let full   = CGRect(origin: .zero, size: size)
+
+        // Force 1:1 pixel scale. The default renderer scale is the screen's (e.g. 3×),
+        // which would make these overlays 3× the PiP's pixel size and misalign the mask
+        // and border against the (1×) pixel-buffer geometry — the "weird border".
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        format.opaque = false
+
+        // Alpha mask — opaque white rounded rect on a clear background.
+        let maskImg = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+            UIColor.white.setFill()
+            UIBezierPath(roundedRect: full, cornerRadius: radius).fill()
+        }
+        if let cg = maskImg.cgImage {
+            pipMaskImage = CIImage(cgImage: cg).transformed(by: CGAffineTransform(translationX: originX, y: originY))
+        }
+
+        // Border — white rounded stroke on a clear background.
+        let borderImg = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+            UIColor.white.setStroke()
+            let path = UIBezierPath(
+                roundedRect: full.insetBy(dx: border / 2, dy: border / 2),
+                cornerRadius: radius
+            )
+            path.lineWidth = border
+            path.stroke()
+        }
+        if let cg = borderImg.cgImage {
+            pipBorderImage = CIImage(cgImage: cg).transformed(by: CGAffineTransform(translationX: originX, y: originY))
+        }
     }
 
-    private func startRearSessionIfNeeded(at timestamp: CMTime) {
-        guard !rearSessionStarted, rearWriter?.status == .writing else { return }
-        rearWriter?.startSession(atSourceTime: timestamp)
-        rearSessionTimestamp = timestamp
-        rearSessionStarted   = true
-        checkBothSessionsStarted()
+    // MARK: - Compositing
+
+    /// Normalises a raw camera buffer to an upright portrait frame at the target resolution.
+    private func normalizedPortrait(_ raw: CVPixelBuffer, pool: CVPixelBufferPool?) -> CVPixelBuffer? {
+        let w = CVPixelBufferGetWidth(raw)
+        let h = CVPixelBufferGetHeight(raw)
+        let dims = settings.resolution.portraitDimensions
+        let src: CVPixelBuffer
+        if w > h {
+            guard let rotated = videoProcessor.rotatedCCW90(raw) else { return nil }
+            src = rotated
+        } else {
+            src = raw
+        }
+        return videoProcessor.cropAndScale(pixelBuffer: src, toWidth: dims.width, toHeight: dims.height, pool: pool)
     }
 
-    private func checkBothSessionsStarted() {
-        guard frontSessionStarted && rearSessionStarted else { return }
-        sessionStarted = true
-        sessionStartTimestamp = CMTIME_IS_VALID(frontSessionTimestamp) && CMTIME_IS_VALID(rearSessionTimestamp)
-            ? CMTimeMinimum(frontSessionTimestamp, rearSessionTimestamp)
-            : (CMTIME_IS_VALID(frontSessionTimestamp) ? frontSessionTimestamp : rearSessionTimestamp)
+    /// Composites the PiP camera (rounded, top-right) over the fullscreen main camera.
+    private func makeComposite(mainFull: CVPixelBuffer, pipFull: CVPixelBuffer?) -> CVPixelBuffer? {
+        let dims = settings.resolution.portraitDimensions
+        guard let pool = compositePool else { return nil }
+        var out: CVPixelBuffer?
+        guard CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &out) == kCVReturnSuccess,
+              let output = out else { return nil }
+
+        var result = CIImage(cvPixelBuffer: mainFull)
+
+        if let pipFull = pipFull {
+            let scale = pipRect.width / CGFloat(CVPixelBufferGetWidth(pipFull))
+            let pipImg = CIImage(cvPixelBuffer: pipFull)
+                .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+                .transformed(by: CGAffineTransform(translationX: pipRect.origin.x, y: pipRect.origin.y))
+
+            let shaped: CIImage
+            if let mask = pipMaskImage {
+                // "Source In": keep the PiP only where the rounded mask is opaque.
+                shaped = pipImg.applyingFilter("CISourceInCompositing",
+                                               parameters: [kCIInputBackgroundImageKey: mask])
+            } else {
+                shaped = pipImg
+            }
+            result = shaped.composited(over: result)
+
+            if let border = pipBorderImage {
+                result = border.composited(over: result)
+            }
+        }
+
+        videoProcessor.ciContext.render(
+            result, to: output,
+            bounds: CGRect(x: 0, y: 0, width: dims.width, height: dims.height),
+            colorSpace: deviceRGB
+        )
+        return output
     }
 
-    private func clampedFrontTimestamp(_ pts: CMTime) -> CMTime {
-        guard frontSessionStarted, CMTIME_IS_VALID(frontSessionTimestamp) else { return pts }
-        return CMTimeMaximum(pts, frontSessionTimestamp)
+    // MARK: - Frame Processing
+
+    /// Rear frames only update the cache — the front output drives composition.
+    /// Runs even while paused so a resume composites a fresh frame.
+    private func processRearFrame(_ sampleBuffer: CMSampleBuffer) {
+        guard let raw = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        guard let norm = normalizedPortrait(raw, pool: rearNormPool) else { return }
+        rearLock.lock(); latestRearBuffer = norm; rearLock.unlock()
     }
 
-    private func clampedRearTimestamp(_ pts: CMTime) -> CMTime {
-        guard rearSessionStarted, CMTIME_IS_VALID(rearSessionTimestamp) else { return pts }
-        return CMTimeMaximum(pts, rearSessionTimestamp)
-    }
-
-    // MARK: - Process Frames
-
+    /// Front frames are the driver: composite with the latest rear and write one file.
     private func processFrontFrame(_ sampleBuffer: CMSampleBuffer) {
         let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
 
         var shouldWrite = false
-        var skipTimelapse = false
         writerQueue.sync {
             guard isRecording, cameraStabilized else { return }
-            frontLeadFrameCount += 1
-            guard frontLeadFrameCount > FrontBackRecorder.kLeadingFrameSkipCount else { return }
-            startFrontSessionIfNeeded(at: timestamp)
-            shouldWrite = frontSessionStarted
-            if shouldWrite && settings.isTimelapse {
-                frontTotalFrames += 1
-                skipTimelapse = (frontTotalFrames % settings.timelapseSpeed.skipInterval != 0)
+            leadFrameCount += 1
+            guard leadFrameCount > FrontBackRecorder.kLeadingFrameSkipCount else { return }
+            if !sessionStarted, writer?.status == .writing {
+                writer?.startSession(atSourceTime: timestamp)
+                sessionStartTimestamp = timestamp
+                sessionStarted = true
             }
+            shouldWrite = sessionStarted
         }
+        guard shouldWrite else { return }
 
-        guard shouldWrite && !skipTimelapse else { return }
-        guard let rawPixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        guard let rawFront = CMSampleBufferGetImageBuffer(sampleBuffer),
+              let frontFull = normalizedPortrait(rawFront, pool: frontNormPool) else { return }
 
-        // Orientation normalisation (defensive — front cam usually delivers portrait)
-        let bufW = CVPixelBufferGetWidth(rawPixelBuffer)
-        let bufH = CVPixelBufferGetHeight(rawPixelBuffer)
-        if !hasLoggedFrontBufferInfo {
-            hasLoggedFrontBufferInfo = true
-            print("🎥 FrontBackRecorder [FRONT] first frame: \(bufW)×\(bufH) — " +
-                  (bufW > bufH ? "NATIVE LANDSCAPE — rotating 90° CCW" : "PORTRAIT ✓"))
+        rearLock.lock(); let rearFull = latestRearBuffer; rearLock.unlock()
+
+        let mainIsFront = _mainIsFront
+        let mainFull = mainIsFront ? frontFull : (rearFull ?? frontFull)
+        let pipFull  = mainIsFront ? rearFull  : frontFull
+
+        guard let composite = makeComposite(mainFull: mainFull, pipFull: pipFull) else { return }
+
+        if !hasLoggedInfo {
+            hasLoggedInfo = true
+            print("🎥 FrontBackRecorder composite \(CVPixelBufferGetWidth(composite))×\(CVPixelBufferGetHeight(composite)) mainIsFront=\(mainIsFront)")
         }
-
-        let pixelBuffer: CVPixelBuffer
-        if bufW > bufH {
-            guard let rotated = videoProcessor.rotatedCCW90(rawPixelBuffer) else { return }
-            pixelBuffer = rotated
-        } else {
-            pixelBuffer = rawPixelBuffer
-        }
-
-        let dims = settings.resolution.portraitDimensions
-        guard let croppedBuffer = videoProcessor.cropAndScale(
-            pixelBuffer: pixelBuffer, toWidth: dims.width, toHeight: dims.height, pool: frontPool
-        ) else { return }
 
         writerQueue.async { [weak self] in
             guard let self = self,
-                  let input = self.frontVideoInput,
-                  self.frontWriter?.status == .writing else { return }
+                  let input = self.videoInput,
+                  self.writer?.status == .writing else { return }
 
-            let pts: CMTime
-            if self.settings.isTimelapse {
-                let fps = CMTimeScale(self.settings.frameRate.rawValue)
-                pts = CMTimeAdd(self.frontSessionTimestamp,
-                                CMTime(value: CMTimeValue(self.frontWrittenFrames), timescale: fps))
-                self.frontWrittenFrames += 1
-            } else {
-                pts = CMTimeSubtract(self.clampedFrontTimestamp(timestamp), self.pauseOffset)
-            }
+            let pts = CMTimeSubtract(CMTimeMaximum(timestamp, self.sessionStartTimestamp), self.pauseOffset)
 
             var flushed = 0
-            while flushed < self.frontPendingFrames.count, input.isReadyForMoreMediaData {
-                let (buf, t) = self.frontPendingFrames[flushed]
-                self.frontAdaptor?.append(buf, withPresentationTime: t); flushed += 1
+            while flushed < self.pendingFrames.count, input.isReadyForMoreMediaData {
+                let (b, t) = self.pendingFrames[flushed]
+                self.adaptor?.append(b, withPresentationTime: t); flushed += 1
             }
-            if flushed > 0 { self.frontPendingFrames.removeFirst(flushed) }
+            if flushed > 0 { self.pendingFrames.removeFirst(flushed) }
 
             if input.isReadyForMoreMediaData {
-                self.frontAdaptor?.append(croppedBuffer, withPresentationTime: pts)
-            } else if self.frontPendingFrames.count < 60 {
-                self.frontPendingFrames.append((croppedBuffer, pts))
-            }
-        }
-    }
-
-    private func processRearFrame(_ sampleBuffer: CMSampleBuffer) {
-        let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-
-        var shouldWrite = false
-        var skipTimelapse = false
-        writerQueue.sync {
-            guard isRecording, cameraStabilized else { return }
-            rearLeadFrameCount += 1
-            guard rearLeadFrameCount > FrontBackRecorder.kLeadingFrameSkipCount else { return }
-            startRearSessionIfNeeded(at: timestamp)
-            shouldWrite = rearSessionStarted
-            if shouldWrite && settings.isTimelapse {
-                rearTotalFrames += 1
-                skipTimelapse = (rearTotalFrames % settings.timelapseSpeed.skipInterval != 0)
-            }
-        }
-
-        guard shouldWrite && !skipTimelapse else { return }
-        guard let rawPixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-
-        // Rear camera in MultiCam may deliver native landscape — normalise
-        let bufW = CVPixelBufferGetWidth(rawPixelBuffer)
-        let bufH = CVPixelBufferGetHeight(rawPixelBuffer)
-        if !hasLoggedRearBufferInfo {
-            hasLoggedRearBufferInfo = true
-            print("🎥 FrontBackRecorder [REAR] first frame: \(bufW)×\(bufH) — " +
-                  (bufW > bufH ? "NATIVE LANDSCAPE — rotating 90° CCW" : "PORTRAIT ✓"))
-        }
-
-        let pixelBuffer: CVPixelBuffer
-        if bufW > bufH {
-            guard let rotated = videoProcessor.rotatedCCW90(rawPixelBuffer) else { return }
-            pixelBuffer = rotated
-        } else {
-            pixelBuffer = rawPixelBuffer
-        }
-
-        let dims = settings.resolution.portraitDimensions
-        guard let croppedBuffer = videoProcessor.cropAndScale(
-            pixelBuffer: pixelBuffer, toWidth: dims.width, toHeight: dims.height, pool: rearPool
-        ) else { return }
-
-        writerQueue.async { [weak self] in
-            guard let self = self,
-                  let input = self.rearVideoInput,
-                  self.rearWriter?.status == .writing else { return }
-
-            let pts: CMTime
-            if self.settings.isTimelapse {
-                let fps = CMTimeScale(self.settings.frameRate.rawValue)
-                pts = CMTimeAdd(self.rearSessionTimestamp,
-                                CMTime(value: CMTimeValue(self.rearWrittenFrames), timescale: fps))
-                self.rearWrittenFrames += 1
-            } else {
-                pts = CMTimeSubtract(self.clampedRearTimestamp(timestamp), self.pauseOffset)
-            }
-
-            var flushed = 0
-            while flushed < self.rearPendingFrames.count, input.isReadyForMoreMediaData {
-                let (buf, t) = self.rearPendingFrames[flushed]
-                self.rearAdaptor?.append(buf, withPresentationTime: t); flushed += 1
-            }
-            if flushed > 0 { self.rearPendingFrames.removeFirst(flushed) }
-
-            if input.isReadyForMoreMediaData {
-                self.rearAdaptor?.append(croppedBuffer, withPresentationTime: pts)
-            } else if self.rearPendingFrames.count < 60 {
-                self.rearPendingFrames.append((croppedBuffer, pts))
+                self.adaptor?.append(composite, withPresentationTime: pts)
+            } else if self.pendingFrames.count < 60 {
+                self.pendingFrames.append((composite, pts))
             }
         }
     }
@@ -525,17 +458,15 @@ final class FrontBackRecorder: NSObject {
     // MARK: - Finish Writing
 
     private func finishWriting() {
-        let anySessionStarted = frontSessionStarted || rearSessionStarted
-        guard anySessionStarted else {
+        guard sessionStarted else {
             stabilizationTimeoutItem?.cancel()
             stabilizationTimeoutItem = nil
             frontExposureObservation = nil
             rearExposureObservation  = nil
             exposureUnlockItem?.cancel()
             unlockExposure()
-            frontWriter?.cancelWriting()
-            rearWriter?.cancelWriting()
-            cleanupWriters()
+            writer?.cancelWriting()
+            cleanup()
             errorHandler?("Recording stopped before it could start.")
             return
         }
@@ -543,77 +474,54 @@ final class FrontBackRecorder: NSObject {
         exposureUnlockItem?.cancel()
         unlockExposure()
 
-        let group = DispatchGroup()
-        var finalFrontURL: URL?
-        var finalRearURL:  URL?
+        guard let writer = writer else { cleanup(); errorHandler?("No writer."); return }
 
-        if let writer = frontWriter {
-            switch writer.status {
-            case .writing:
-                group.enter()
-                frontVideoInput?.markAsFinished()
-                frontAudioInput?.markAsFinished()
-                let url = frontURL
-                writer.finishWriting {
-                    if writer.status == .completed { finalFrontURL = url }
-                    group.leave()
+        switch writer.status {
+        case .writing:
+            videoInput?.markAsFinished()
+            audioInput?.markAsFinished()
+            let outURL = url
+            writer.finishWriting { [weak self] in
+                DispatchQueue.main.async {
+                    if writer.status == .completed, let u = outURL {
+                        self?.completionHandler?(u)
+                    } else {
+                        self?.errorHandler?("Recording failed. \(writer.error?.localizedDescription ?? "")")
+                    }
+                    self?.cleanup()
                 }
-            case .failed:
-                print("FrontBackRecorder: front writer interrupted — attempting to salvage")
-                finalFrontURL = frontURL
-            default: break
             }
-        }
-
-        if let writer = rearWriter {
-            switch writer.status {
-            case .writing:
-                group.enter()
-                rearVideoInput?.markAsFinished()
-                rearAudioInput?.markAsFinished()
-                let url = rearURL
-                writer.finishWriting {
-                    if writer.status == .completed { finalRearURL = url }
-                    group.leave()
-                }
-            case .failed:
-                print("FrontBackRecorder: rear writer interrupted — attempting to salvage")
-                finalRearURL = rearURL
-            default: break
+        case .failed:
+            // Interrupted — try to salvage the partial file.
+            print("FrontBackRecorder: writer interrupted — attempting to salvage")
+            DispatchQueue.main.async { [weak self] in
+                if let u = self?.url { self?.completionHandler?(u) } else { self?.errorHandler?("Recording failed.") }
+                self?.cleanup()
             }
-        }
-
-        group.notify(queue: .main) { [weak self] in
-            if let fURL = finalFrontURL, let rURL = finalRearURL {
-                self?.completionHandler?(fURL, rURL)
-            } else {
-                let fErr = self?.frontWriter?.error?.localizedDescription ?? ""
-                let rErr = self?.rearWriter?.error?.localizedDescription  ?? ""
-                self?.errorHandler?("Recording failed. Front: \(fErr) Rear: \(rErr)")
+        default:
+            DispatchQueue.main.async { [weak self] in
+                self?.errorHandler?("Recording failed.")
+                self?.cleanup()
             }
-            self?.cleanupWriters()
         }
     }
 
-    private func cleanupWriters() {
+    private func cleanup() {
         stabilizationTimeoutItem?.cancel()
         stabilizationTimeoutItem = nil
         frontExposureObservation = nil
         rearExposureObservation  = nil
         exposureUnlockItem?.cancel()
         unlockExposure()
-        frontWriter      = nil
-        rearWriter       = nil
-        frontVideoInput  = nil
-        rearVideoInput   = nil
-        frontAudioInput  = nil
-        rearAudioInput   = nil
-        frontAdaptor     = nil
-        rearAdaptor      = nil
-        frontPool        = nil
-        rearPool         = nil
-        frontPendingFrames.removeAll()
-        rearPendingFrames.removeAll()
+        writer = nil
+        videoInput = nil
+        audioInput = nil
+        adaptor = nil
+        compositePool = nil
+        frontNormPool = nil
+        rearNormPool  = nil
+        pendingFrames.removeAll()
+        rearLock.lock(); latestRearBuffer = nil; rearLock.unlock()
     }
 }
 
@@ -625,12 +533,14 @@ extension FrontBackRecorder: AVCaptureVideoDataOutputSampleBufferDelegate {
         didOutput sampleBuffer: CMSampleBuffer,
         from connection: AVCaptureConnection
     ) {
+        if output === rearOutput {
+            // Cache the latest rear frame even while paused so resume composites fresh.
+            processRearFrame(sampleBuffer)
+            return
+        }
         guard !isPaused else { return }
-
         if output === frontOutput {
             processFrontFrame(sampleBuffer)
-        } else if output === rearOutput {
-            processRearFrame(sampleBuffer)
         }
     }
 

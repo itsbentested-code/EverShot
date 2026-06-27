@@ -26,6 +26,10 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var saveComplete = false
     @Published var saveError: String?
 
+    /// Front/Back mode: whether the FRONT camera is currently the fullscreen "main"
+    /// (true) or the corner PiP (false). Drives the live preview routing + the composite.
+    @Published var frontBackMainIsFront = true
+
     // MARK: - Session
 
     private var multiCamSession: AVCaptureMultiCamSession?
@@ -43,6 +47,10 @@ final class CameraManager: NSObject, ObservableObject {
     private var singleLensRecorder: SingleLensRecorder?
     private var frontBackRecorder: FrontBackRecorder?
     let videoProcessor = VideoProcessor()
+
+    // Front/Back preview layers, retained so the flip can swap their on-screen roles.
+    private var frontBackFrontPreview: AVCaptureVideoPreviewLayer?
+    private var frontBackRearPreview:  AVCaptureVideoPreviewLayer?
 
     // MARK: - Settings
 
@@ -273,7 +281,9 @@ final class CameraManager: NSObject, ObservableObject {
                 // True Front+Rear MultiCam — two simultaneous portrait videos
                 self.configureFrontBackSession()
             } else if self.settings.dualLensUseFrontCamera {
-                // Dual/Single modes flipped to front camera
+                // Flipped to the front camera. configureFrontCameraSession keeps the
+                // original Dual-front look (front fullscreen + PiP) and routes Single
+                // mode to the crop-based front-single path internally.
                 self.configureFrontCameraSession()
             } else if self.settings.isSingleLensMode {
                 // Single Lens mode — Wide (1×) rear camera only, same two-crop approach
@@ -562,6 +572,14 @@ final class CameraManager: NSObject, ObservableObject {
     // MARK: - Front Camera Session (used when dual-lens mode flips to front)
 
     private func configureFrontCameraSession() {
+        // Single Lens mode flipped to the front camera uses the same crop-based approach
+        // as the rear Wide single-lens session (portrait full + centre 16:9 landscape crop,
+        // framing-guide overlay, no PiP) — just with the front sensor instead of the rear Wide.
+        if settings.isSingleLensMode {
+            configureFrontSingleLensSession()
+            return
+        }
+
         let session = AVCaptureSession()
         self.singleSession = session
 
@@ -608,23 +626,15 @@ final class CameraManager: NSObject, ObservableObject {
             connection.isVideoMirrored = false
         }
 
-        // Landscape output — native landscapeRight orientation.
-        // By requesting .landscapeRight here, the system physically rotates the front
-        // camera's sensor data to deliver full-width 1920×1080 landscape frames instead
-        // of the narrow portrait crop we used previously.  This gives full FOV without
-        // any zoom — the scene fills the landscape frame the same way it fills portrait.
-        let landscapeOutput = AVCaptureVideoDataOutput()
-        landscapeOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
-        landscapeOutput.alwaysDiscardsLateVideoFrames = true
-
-        if session.canAddOutput(landscapeOutput) {
-            session.addOutput(landscapeOutput)
-        }
-        if let lConn = landscapeOutput.connection(with: .video) {
-            lConn.videoOrientation = .landscapeRight
-            lConn.automaticallyAdjustsVideoMirroring = false
-            lConn.isVideoMirrored = false   // recorded landscape is not mirrored
-        }
+        // IMPORTANT: do NOT add a second .landscapeRight video-data output here.
+        // This is a plain AVCaptureSession (not MultiCam). A non-MultiCam session can't
+        // reliably feed two AVCaptureVideoDataOutputs with independent orientations — the
+        // second output ends up delivering the SAME frames as the first, so both writers
+        // recorded the same source (two identical/duplicated exports).
+        //
+        // Instead the landscape file is derived in software from this single portrait
+        // output: SingleLensRecorder crops a centre 16:9 strip (same reliable approach as
+        // the rear single-lens path). Both files are then distinct and correctly upright.
 
         // Audio
         if let audioComponents = audioManager.configure() {
@@ -662,23 +672,24 @@ final class CameraManager: NSObject, ObservableObject {
 
         session.commitConfiguration()
 
-        // Main preview layer — full-screen viewfinder
+        // Main preview layer — full-screen viewfinder.
+        // Un-mirrored so the preview matches the (un-mirrored) saved file exactly.
         let preview = AVCaptureVideoPreviewLayer(session: session)
         preview.videoGravity = .resizeAspectFill
         if let connection = preview.connection {
             connection.videoOrientation = .portrait
             connection.automaticallyAdjustsVideoMirroring = false
-            connection.isVideoMirrored = true
+            connection.isVideoMirrored = false
         }
 
-        // Recorder — portrait from videoOutput, landscape from native landscapeOutput
+        // Recorder — portrait + landscape both derived in software from the single front
+        // output (no separate native-landscape output; see note above).
         let recorder = SingleLensRecorder(
             settings: settings,
             videoProcessor: videoProcessor,
             audioManager: audioManager
         )
         recorder.setOutput(videoOutput)
-        recorder.setNativeLandscapeOutput(landscapeOutput)
 
         // PiP thumbnail: feed frames into the isolated pipModel so only the
         // small PiP subview re-renders per frame — not all of RecordingView.
@@ -779,6 +790,114 @@ final class CameraManager: NSObject, ObservableObject {
         self.singleLensRecorder = recorder
         self.wideDeviceRef      = wideDevice
         self.frontDeviceRef     = nil
+
+        session.startRunning()
+
+        DispatchQueue.main.async { [weak self] in
+            self?.previewLayer?.removeFromSuperlayer()
+            self?.secondaryPreviewLayer?.removeFromSuperlayer()
+            self?.previewLayer          = preview
+            self?.secondaryPreviewLayer = nil
+            self?.pipModel.snapshot     = nil
+        }
+    }
+
+    // MARK: - Front Single Lens Session
+
+    /// Single Lens mode using the FRONT camera. Identical layout/behavior to
+    /// configureWideOnlySession (one feed → portrait 9:16 + centre 16:9 landscape crop,
+    /// framing-guide overlay, no PiP) — but with the front sensor. Preview is mirrored
+    /// for a natural selfie feel; the recorded files are unmirrored so playback looks
+    /// correct to viewers.
+    private func configureFrontSingleLensSession() {
+        let session = AVCaptureSession()
+        self.singleSession = session
+
+        session.beginConfiguration()
+        session.sessionPreset = .high
+
+        let chosenDevice = DeviceCapabilities.frontUltraWideCamera ?? DeviceCapabilities.frontCamera
+        guard let frontDevice = chosenDevice,
+              let videoInput = try? AVCaptureDeviceInput(device: frontDevice) else {
+            print("CameraManager: Failed to get front camera for single-lens mode")
+            session.commitConfiguration()
+            return
+        }
+
+        if session.canAddInput(videoInput) {
+            session.addInput(videoInput)
+        }
+
+        let videoOutput = AVCaptureVideoDataOutput()
+        videoOutput.videoSettings = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+        ]
+        videoOutput.alwaysDiscardsLateVideoFrames = true
+
+        if session.canAddOutput(videoOutput) {
+            session.addOutput(videoOutput)
+        }
+
+        // Single portrait recording output — NOT mirrored (preview is mirrored below).
+        // SingleLensRecorder crops both portrait (full) and landscape (centre 16:9) from this.
+        if let connection = videoOutput.connection(with: .video) {
+            connection.videoOrientation = .portrait
+            connection.automaticallyAdjustsVideoMirroring = false
+            connection.isVideoMirrored = false
+            if connection.isVideoStabilizationSupported {
+                connection.preferredVideoStabilizationMode = .off
+            }
+        }
+
+        // Audio
+        if let audioComponents = audioManager.configure() {
+            if session.canAddInput(audioComponents.input) {
+                session.addInput(audioComponents.input)
+            }
+            if session.canAddOutput(audioComponents.output) {
+                session.addOutput(audioComponents.output)
+            }
+        }
+
+        configureDevice(frontDevice, frameRate: settings.frameRate, resolution: settings.resolution)
+
+        // Disable Center Stage — it auto-crops/pans to track faces, fighting our crop pipeline.
+        if #available(iOS 14.5, *), AVCaptureDevice.isCenterStageEnabled {
+            AVCaptureDevice.centerStageControlMode = .app
+            AVCaptureDevice.isCenterStageEnabled   = false
+        }
+
+        // Unlock the full front FOV (see configureFrontCameraSession for rationale).
+        do {
+            try frontDevice.lockForConfiguration()
+            frontDevice.videoZoomFactor = frontDevice.minAvailableVideoZoomFactor
+            frontDevice.unlockForConfiguration()
+        } catch {
+            print("CameraManager: Could not set min zoom on front camera (single): \(error)")
+        }
+
+        session.commitConfiguration()
+
+        let preview = AVCaptureVideoPreviewLayer(session: session)
+        preview.videoGravity = .resizeAspectFill
+        if let connection = preview.connection {
+            connection.videoOrientation = .portrait
+            connection.automaticallyAdjustsVideoMirroring = false
+            connection.isVideoMirrored = false  // un-mirrored to match the saved file
+        }
+
+        let recorder = SingleLensRecorder(
+            settings: settings,
+            videoProcessor: videoProcessor,
+            audioManager: audioManager
+        )
+        recorder.setOutput(videoOutput)
+        // No native landscape output and no onPreviewFrame — landscape is a centre crop
+        // and there is no PiP in single-lens mode (front or rear).
+
+        self.singleLensRecorder = recorder
+        self.frontDeviceRef     = frontDevice
+        self.wideDeviceRef      = nil
 
         session.startRunning()
 
@@ -921,7 +1040,7 @@ final class CameraManager: NSObject, ObservableObject {
         let frontPreviewConn = AVCaptureConnection(inputPort: frontVideoPort, videoPreviewLayer: frontPreview)
         frontPreviewConn.videoOrientation = .portrait
         frontPreviewConn.automaticallyAdjustsVideoMirroring = false
-        frontPreviewConn.isVideoMirrored = true // mirror the preview only — not the recording
+        frontPreviewConn.isVideoMirrored = false // un-mirrored to match the saved (un-mirrored) file
         if session.canAddConnection(frontPreviewConn) { session.addConnection(frontPreviewConn) }
 
         // --- Recorder ---
@@ -931,11 +1050,17 @@ final class CameraManager: NSObject, ObservableObject {
             audioManager: audioManager
         )
         recorder.setOutputs(frontOutput: frontVideoOutput, rearOutput: rearVideoOutput)
+        // Default: FRONT is the fullscreen main, REAR is the corner PiP.
+        recorder.setMainIsFront(true)
         self.frontBackRecorder = recorder
 
         // Store device refs for AEC KVO
         self.wideDeviceRef  = rearDevice
         self.frontDeviceRef = frontDevice
+
+        // Retain both preview layers so the flip can swap their on-screen roles live.
+        self.frontBackFrontPreview = frontPreview
+        self.frontBackRearPreview  = rearPreview
 
         monitorSessionCosts(session)
         session.startRunning()
@@ -943,21 +1068,25 @@ final class CameraManager: NSObject, ObservableObject {
         DispatchQueue.main.async { [weak self] in
             self?.previewLayer?.removeFromSuperlayer()
             self?.secondaryPreviewLayer?.removeFromSuperlayer()
-            self?.previewLayer          = rearPreview    // main = rear wide
-            self?.secondaryPreviewLayer = frontPreview   // pip  = front
+            self?.frontBackMainIsFront  = true
+            self?.previewLayer          = frontPreview   // main = front (default)
+            self?.secondaryPreviewLayer = rearPreview    // pip  = rear
             self?.pipModel.snapshot     = nil
         }
     }
 
-    /// Swaps main vs PiP preview in Front/Back mode.
-    /// The recording outputs (front→frontFile, rear→rearFile) are unchanged.
-    func swapFrontBackAssignment() {
-        guard settings.isFrontBackMode else { return }
+    /// Front/Back mode: swap which camera is the fullscreen main vs the corner PiP.
+    /// Safe to call any time, including mid-recording — the composite follows immediately.
+    func swapFrontBackMain() {
+        guard frontBackRecorder != nil,
+              let frontPreview = frontBackFrontPreview,
+              let rearPreview  = frontBackRearPreview else { return }
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            let old = self.previewLayer
-            self.previewLayer          = self.secondaryPreviewLayer
-            self.secondaryPreviewLayer = old
+            self.frontBackMainIsFront.toggle()
+            self.frontBackRecorder?.setMainIsFront(self.frontBackMainIsFront)
+            self.previewLayer          = self.frontBackMainIsFront ? frontPreview : rearPreview
+            self.secondaryPreviewLayer = self.frontBackMainIsFront ? rearPreview  : frontPreview
         }
     }
 
@@ -1149,7 +1278,11 @@ final class CameraManager: NSObject, ObservableObject {
             }
 
             if let fbRecorder = self.frontBackRecorder {
-                fbRecorder.stopRecording(completion: completion, error: errorHandler)
+                // Front/Back produces a SINGLE composited file.
+                fbRecorder.stopRecording(
+                    completion: { [weak self] url in self?.saveRecordedSingleFile(url: url) },
+                    error: errorHandler
+                )
             } else if let dualRecorder = self.dualLensRecorder {
                 dualRecorder.stopRecording(completion: completion, error: errorHandler)
             } else if let singleRecorder = self.singleLensRecorder {
@@ -1159,6 +1292,24 @@ final class CameraManager: NSObject, ObservableObject {
     }
 
     // MARK: - Save Files
+
+    /// Saves a single composited file (Front/Back mode) to Photos.
+    private func saveRecordedSingleFile(url: URL) {
+        PhotoLibrarySaver.saveVideo(url: url) { [weak self] result in
+            DispatchQueue.main.async {
+                self?.isSaving = false
+                switch result {
+                case .success:
+                    self?.saveComplete = true
+                    try? FileManager.default.removeItem(at: url)
+                case .failure(let error):
+                    self?.saveError = error.localizedDescription
+                    try? FileManager.default.removeItem(at: url)
+                }
+                self?.endBackgroundTaskIfNeeded()
+            }
+        }
+    }
 
     private func saveRecordedFiles(portraitURL: URL, landscapeURL: URL) {
         PhotoLibrarySaver.saveBothVideos(
