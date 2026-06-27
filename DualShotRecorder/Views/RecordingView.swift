@@ -686,6 +686,7 @@ struct RecordingView: View {
                     galleryButton
                 }
                 .opacity(cameraManager.isRecording ? 0 : 1)
+                .allowsHitTesting(!cameraManager.isRecording)
 
                 Spacer()
 

@@ -534,8 +534,10 @@ extension FrontBackRecorder: AVCaptureVideoDataOutputSampleBufferDelegate {
         from connection: AVCaptureConnection
     ) {
         if output === rearOutput {
-            // Cache the latest rear frame even while paused so resume composites fresh.
-            processRearFrame(sampleBuffer)
+            // Cache the latest rear frame while recording (including while paused, so a
+            // resume composites a fresh frame). Skipped when idle to avoid pointless
+            // per-frame GPU work — the rear PREVIEW uses its own preview layer, not this.
+            if isRecording { processRearFrame(sampleBuffer) }
             return
         }
         guard !isPaused else { return }
