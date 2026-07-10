@@ -43,6 +43,11 @@ final class SingleLensRecorder: NSObject {
     private var sessionStartTimestamp: CMTime = .invalid
     private var cameraStabilized = false
 
+    // Drain state — true briefly after a stop when stabilization is on, so the EIS
+    // pipeline's in-flight video frames can still be written (keeps video length in
+    // sync with audio; avoids the "frozen last frame" bug). Audio has already stopped.
+    private var isDraining = false
+
     // Pause state — wall-clock based, checked without queue sync in captureOutput
     private var isPaused      = false
     private var pauseWallStart: Double = 0
@@ -131,6 +136,7 @@ final class SingleLensRecorder: NSObject {
             self.portraitPendingFrames.removeAll()
             self.landscapePendingFrames.removeAll()
             self.isPaused       = false
+            self.isDraining     = false
             self.pauseWallStart = 0
             self.pauseOffset    = .zero
             self.hasLoggedBufferInfo         = false
@@ -197,12 +203,27 @@ final class SingleLensRecorder: NSObject {
     func stopRecording(completion: @escaping (URL, URL) -> Void, error: @escaping (String) -> Void) {
         writerQueue.async { [weak self] in
             guard let self = self else { return }
-            self.isRecording = false
-            self.isPaused    = false
             self.completionHandler = completion
             self.errorHandler = error
-            self.audioManager.onAudioBuffer = nil
-            self.finishWriting()
+            self.audioManager.onAudioBuffer = nil   // audio stops at the stop moment
+            self.isPaused = false
+
+            // With stabilization ON, the EIS pipeline holds a few frames of look-ahead.
+            // Finalizing immediately drops those in-flight frames and the video ends short
+            // of the audio (frozen last frame). Keep writing VIDEO for a short drain window,
+            // then finalize. Without stabilization there's no look-ahead — finish now.
+            if self.sessionStarted {
+                self.isRecording = false
+                self.isDraining  = true
+                self.writerQueue.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                    guard let self = self else { return }
+                    self.isDraining = false
+                    self.finishWriting()
+                }
+            } else {
+                self.isRecording = false
+                self.finishWriting()
+            }
         }
     }
 
@@ -357,7 +378,9 @@ final class SingleLensRecorder: NSObject {
         var shouldWrite = false
         var skipTimelapse = false
         writerQueue.sync {
-            guard isRecording, cameraStabilized else { return }
+            // Keep writing video while recording OR during the post-stop drain window
+            // (stabilization look-ahead flush). Audio has already stopped by then.
+            guard (isRecording || isDraining), cameraStabilized else { return }
 
             leadFrameCount += 1
             guard leadFrameCount > SingleLensRecorder.kLeadingFrameSkipCount else { return }

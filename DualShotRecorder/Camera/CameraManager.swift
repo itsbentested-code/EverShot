@@ -395,13 +395,7 @@ final class CameraManager: NSObject, ObservableObject {
         // (Requesting .portrait here causes the system to letterbox or incorrectly rotate
         // the output depending on the active format — both produce wrong exported clips.)
         wideConnection.videoOrientation = .landscapeRight
-        // Disable EIS — we receive raw frames and handle crop/scale ourselves.
-        // With EIS enabled (the default), the stabiliser resets its crop reference
-        // at the start of every recording and drifts back to centre over ~1 second,
-        // producing an unwanted zoom-out effect at the beginning of each clip.
-        if wideConnection.isVideoStabilizationSupported {
-            wideConnection.preferredVideoStabilizationMode = .off
-        }
+        // Stabilization is applied after the formats are set (see applyStabilization below).
         guard session.canAddConnection(wideConnection) else { session.commitConfiguration(); return }
         session.addConnection(wideConnection)
 
@@ -439,10 +433,6 @@ final class CameraManager: NSObject, ObservableObject {
         // (~1.78× upscale after cropping a narrow portrait strip).
         // The secondary preview connection (PiP) keeps .portrait independently.
         ultraWideConnection.videoOrientation = .landscapeRight
-        // Same EIS disable as wide connection above.
-        if ultraWideConnection.isVideoStabilizationSupported {
-            ultraWideConnection.preferredVideoStabilizationMode = .off
-        }
         guard session.canAddConnection(ultraWideConnection) else { session.commitConfiguration(); return }
         session.addConnection(ultraWideConnection)
 
@@ -473,6 +463,12 @@ final class CameraManager: NSObject, ObservableObject {
         // in a non-MultiCam format (common at 4K 60fps on many devices).
         configureDevice(wideDevice, frameRate: settings.frameRate, resolution: settings.resolution, multiCamOnly: true)
         configureDevice(ultraWideDevice, frameRate: settings.frameRate, resolution: settings.resolution, multiCamOnly: true)
+
+        // Stabilization AFTER the formats are set. Both rear lenses are stabilized so the
+        // two recorded streams stay smoothed and in sync. (No-op if the MultiCam format
+        // doesn't support it — applyStabilization logs that.)
+        applyStabilization(to: wideVideoOutput)
+        applyStabilization(to: ultraWideVideoOutput)
 
         // --- Apple Log Color Space (iOS 17+) ---
         if #available(iOS 17, *), settings.appleLog {
@@ -617,9 +613,7 @@ final class CameraManager: NSObject, ObservableObject {
             session.addOutput(videoOutput)
         }
 
-        // Recording output — portrait orientation, NOT mirrored.
-        // The preview is mirrored (feels natural, like a mirror) but the
-        // saved file must be unmirrored so playback looks correct to viewers.
+        // Recording output — portrait orientation, un-mirrored (matches the preview).
         if let connection = videoOutput.connection(with: .video) {
             connection.videoOrientation = .portrait
             connection.automaticallyAdjustsVideoMirroring = false
@@ -647,6 +641,9 @@ final class CameraManager: NSObject, ObservableObject {
         }
 
         configureDevice(frontDevice, frameRate: settings.frameRate, resolution: settings.resolution)
+
+        // Stabilization AFTER the active format is set (see applyStabilization).
+        applyStabilization(to: videoOutput)
 
         // Disable Center Stage — it auto-crops/pans to track faces which fights our pipeline.
         if #available(iOS 14.5, *), AVCaptureDevice.isCenterStageEnabled {
@@ -748,15 +745,6 @@ final class CameraManager: NSObject, ObservableObject {
 
         if let connection = videoOutput.connection(with: .video) {
             connection.videoOrientation = .portrait
-            // Disable EIS — we receive raw frames and handle crop/scale ourselves.
-            // With EIS enabled, the stabiliser builds a lookahead buffer that delays
-            // delivery of the first video frame by ~1 second. This causes two bugs:
-            // (1) audio before the first delivered frame is dropped (no audio at start),
-            // (2) the video track ends ~1 second shorter than the audio track, making
-            // the playback appear frozen on the last frame. Same fix as dual cam sessions.
-            if connection.isVideoStabilizationSupported {
-                connection.preferredVideoStabilizationMode = .off
-            }
         }
 
         // Audio
@@ -770,6 +758,10 @@ final class CameraManager: NSObject, ObservableObject {
         }
 
         configureDevice(wideDevice, frameRate: settings.frameRate, resolution: settings.resolution)
+
+        // Stabilization AFTER the active format is set (always on; .standard EIS, 4K-safe).
+        // SingleLensRecorder drains in-flight frames on stop so audio/video stay in sync.
+        applyStabilization(to: videoOutput)
 
         session.commitConfiguration()
 
@@ -844,9 +836,6 @@ final class CameraManager: NSObject, ObservableObject {
             connection.videoOrientation = .portrait
             connection.automaticallyAdjustsVideoMirroring = false
             connection.isVideoMirrored = false
-            if connection.isVideoStabilizationSupported {
-                connection.preferredVideoStabilizationMode = .off
-            }
         }
 
         // Audio
@@ -860,6 +849,9 @@ final class CameraManager: NSObject, ObservableObject {
         }
 
         configureDevice(frontDevice, frameRate: settings.frameRate, resolution: settings.resolution)
+
+        // Stabilization AFTER the active format is set (see applyStabilization).
+        applyStabilization(to: videoOutput)
 
         // Disable Center Stage — it auto-crops/pans to track faces, fighting our crop pipeline.
         if #available(iOS 14.5, *), AVCaptureDevice.isCenterStageEnabled {
@@ -955,9 +947,7 @@ final class CameraManager: NSObject, ObservableObject {
 
         let rearRecordConn = AVCaptureConnection(inputPorts: [rearVideoPort], output: rearVideoOutput)
         rearRecordConn.videoOrientation = .portrait
-        if rearRecordConn.isVideoStabilizationSupported {
-            rearRecordConn.preferredVideoStabilizationMode = .off
-        }
+        // Stabilization applied after the formats are set (see applyStabilization below).
         guard session.canAddConnection(rearRecordConn) else { session.commitConfiguration(); return }
         session.addConnection(rearRecordConn)
 
@@ -992,9 +982,7 @@ final class CameraManager: NSObject, ObservableObject {
         frontRecordConn.videoOrientation = .portrait
         frontRecordConn.automaticallyAdjustsVideoMirroring = false
         frontRecordConn.isVideoMirrored = false // record unmirrored (correct for exports)
-        if frontRecordConn.isVideoStabilizationSupported {
-            frontRecordConn.preferredVideoStabilizationMode = .off
-        }
+        // Stabilization applied after the formats are set (see applyStabilization below).
         guard session.canAddConnection(frontRecordConn) else { session.commitConfiguration(); return }
         session.addConnection(frontRecordConn)
 
@@ -1018,6 +1006,11 @@ final class CameraManager: NSObject, ObservableObject {
         // --- Device Configuration ---
         configureDevice(rearDevice,   frameRate: settings.frameRate, resolution: settings.resolution, multiCamOnly: true)
         configureDevice(frontDevice,  frameRate: settings.frameRate, resolution: settings.resolution, multiCamOnly: true)
+
+        // Stabilization AFTER the formats are set. Both cameras are stabilized so the
+        // composited PiP is smoothed too. (No-op if the MultiCam format doesn't support it.)
+        applyStabilization(to: rearVideoOutput)
+        applyStabilization(to: frontVideoOutput)
 
         // Disable Center Stage so it doesn't fight the front-camera crop pipeline.
         if #available(iOS 14.5, *), AVCaptureDevice.isCenterStageEnabled {
@@ -1088,6 +1081,17 @@ final class CameraManager: NSObject, ObservableObject {
             self.previewLayer          = self.frontBackMainIsFront ? frontPreview : rearPreview
             self.secondaryPreviewLayer = self.frontBackMainIsFront ? rearPreview  : frontPreview
         }
+    }
+
+    // MARK: - Stabilization
+
+    /// Applies the user's stabilization preference to a video-data output's connection.
+    /// MUST be called AFTER the device's active format is chosen (configureDevice) — otherwise
+    /// `isVideoStabilizationSupported` reflects the default format and the mode never engages.
+    private func applyStabilization(to output: AVCaptureVideoDataOutput) {
+        guard let conn = output.connection(with: .video),
+              conn.isVideoStabilizationSupported else { return }
+        conn.preferredVideoStabilizationMode = .standard
     }
 
     // MARK: - Device Configuration

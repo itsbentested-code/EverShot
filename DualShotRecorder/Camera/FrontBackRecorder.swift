@@ -55,6 +55,9 @@ final class FrontBackRecorder: NSObject {
     // MARK: - State
 
     private var isRecording = false
+    // Drain window after stop when stabilization is on — keeps compositing the EIS
+    // pipeline's in-flight frames so the video doesn't end short of the audio.
+    private var isDraining = false
     private var sessionStarted = false
     private var sessionStartTimestamp: CMTime = .invalid
 
@@ -131,6 +134,7 @@ final class FrontBackRecorder: NSObject {
             self.leadFrameCount        = 0
             self.pendingFrames.removeAll()
             self.isPaused       = false
+            self.isDraining     = false
             self.pauseWallStart = 0
             self.pauseOffset    = .zero
             self.hasLoggedInfo  = false
@@ -197,12 +201,25 @@ final class FrontBackRecorder: NSObject {
     func stopRecording(completion: @escaping (URL) -> Void, error: @escaping (String) -> Void) {
         writerQueue.async { [weak self] in
             guard let self = self else { return }
-            self.isRecording = false
             self.isPaused    = false
             self.completionHandler = completion
             self.errorHandler = error
-            self.audioManager.onAudioBuffer = nil
-            self.finishWriting()
+            self.audioManager.onAudioBuffer = nil   // audio stops at the stop moment
+
+            // With stabilization on, drain the EIS look-ahead so the composited video
+            // doesn't end short of the audio. Without it, finish immediately.
+            if self.sessionStarted {
+                self.isRecording = false
+                self.isDraining  = true
+                self.writerQueue.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                    guard let self = self else { return }
+                    self.isDraining = false
+                    self.finishWriting()
+                }
+            } else {
+                self.isRecording = false
+                self.finishWriting()
+            }
         }
     }
 
@@ -405,7 +422,7 @@ final class FrontBackRecorder: NSObject {
 
         var shouldWrite = false
         writerQueue.sync {
-            guard isRecording, cameraStabilized else { return }
+            guard (isRecording || isDraining), cameraStabilized else { return }
             leadFrameCount += 1
             guard leadFrameCount > FrontBackRecorder.kLeadingFrameSkipCount else { return }
             if !sessionStarted, writer?.status == .writing {
@@ -427,11 +444,6 @@ final class FrontBackRecorder: NSObject {
         let pipFull  = mainIsFront ? rearFull  : frontFull
 
         guard let composite = makeComposite(mainFull: mainFull, pipFull: pipFull) else { return }
-
-        if !hasLoggedInfo {
-            hasLoggedInfo = true
-            print("🎥 FrontBackRecorder composite \(CVPixelBufferGetWidth(composite))×\(CVPixelBufferGetHeight(composite)) mainIsFront=\(mainIsFront)")
-        }
 
         writerQueue.async { [weak self] in
             guard let self = self,
@@ -534,10 +546,10 @@ extension FrontBackRecorder: AVCaptureVideoDataOutputSampleBufferDelegate {
         from connection: AVCaptureConnection
     ) {
         if output === rearOutput {
-            // Cache the latest rear frame while recording (including while paused, so a
-            // resume composites a fresh frame). Skipped when idle to avoid pointless
-            // per-frame GPU work — the rear PREVIEW uses its own preview layer, not this.
-            if isRecording { processRearFrame(sampleBuffer) }
+            // Cache the latest rear frame while recording (including while paused, and
+            // during the post-stop drain, so composites stay fresh). Skipped when idle to
+            // avoid pointless GPU work — the rear PREVIEW uses its own preview layer.
+            if isRecording || isDraining { processRearFrame(sampleBuffer) }
             return
         }
         guard !isPaused else { return }

@@ -40,6 +40,9 @@ final class DualLensRecorder: NSObject {
 
     // State — combined flag used for audio gating (both writers must be ready)
     private var isRecording = false
+    // Drain window after stop when stabilization is on — keeps writing the EIS pipeline's
+    // in-flight video frames (both lenses) so the tracks don't end short of the audio.
+    private var isDraining = false
     private var sessionStarted = false
     private var sessionStartTimestamp: CMTime = .invalid  // earliest of the two per-writer timestamps
 
@@ -175,6 +178,7 @@ final class DualLensRecorder: NSObject {
             self.portraitPendingFrames.removeAll()
             self.landscapePendingFrames.removeAll()
             self.isPaused       = false
+            self.isDraining     = false
             self.pauseWallStart = 0
             self.pauseOffset    = .zero
             self.hasLoggedPortraitBufferInfo  = false
@@ -259,12 +263,26 @@ final class DualLensRecorder: NSObject {
     func stopRecording(completion: @escaping (URL, URL) -> Void, error: @escaping (String) -> Void) {
         writerQueue.async { [weak self] in
             guard let self = self else { return }
-            self.isRecording = false
             self.isPaused    = false
             self.completionHandler = completion
             self.errorHandler = error
-            self.audioManager.onAudioBuffer = nil
-            self.finishWriting()
+            self.audioManager.onAudioBuffer = nil   // audio stops at the stop moment
+
+            // With stabilization on, drain the EIS look-ahead (both lenses) so the video
+            // tracks don't end short of the audio. Without it, finish immediately.
+            let anyStarted = self.portraitSessionStarted || self.landscapeSessionStarted
+            if anyStarted {
+                self.isRecording = false
+                self.isDraining  = true
+                self.writerQueue.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                    guard let self = self else { return }
+                    self.isDraining = false
+                    self.finishWriting()
+                }
+            } else {
+                self.isRecording = false
+                self.finishWriting()
+            }
         }
     }
 
@@ -445,7 +463,7 @@ final class DualLensRecorder: NSObject {
             diagLeadCount     = portraitLeadFrameCount
             diagWriterStatus  = portraitWriter?.status ?? .unknown
 
-            guard isRecording, cameraStabilized else { return }
+            guard (isRecording || isDraining), cameraStabilized else { return }
 
             portraitLeadFrameCount += 1
             guard portraitLeadFrameCount > DualLensRecorder.kLeadingFrameSkipCount else { return }
@@ -532,7 +550,7 @@ final class DualLensRecorder: NSObject {
         var shouldWrite = false
         var skipTimelapse = false
         writerQueue.sync {
-            guard isRecording, cameraStabilized else { return }
+            guard (isRecording || isDraining), cameraStabilized else { return }
 
             landscapeLeadFrameCount += 1
             guard landscapeLeadFrameCount > DualLensRecorder.kLeadingFrameSkipCount else { return }
