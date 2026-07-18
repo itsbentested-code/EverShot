@@ -2,7 +2,7 @@ import SwiftUI
 
 struct PrivacyPolicyView: View {
 
-    private let lastUpdated = "April 2026"
+    private let lastUpdated = "July 2026"
 
     var body: some View {
         ScrollView {
@@ -14,27 +14,26 @@ struct PrivacyPolicyView: View {
 
                 PolicySection(title: "Overview") {
                     """
-                    EverShot Cam ("the App") is a dual-camera video recording app. We take your privacy seriously. This policy explains what information the App accesses, how it is used, and what we do (and don't do) with it.
+                    EverShot ("the App") is a dual-camera video recording app. This policy explains what the App accesses, how that information is used, and what we do — and don't do — with it.
 
-                    The short version: everything stays on your device. We don't collect, store, or transmit any personal data.
+                    Your recordings stay on your device. We never see, upload, or store your videos. The only information that leaves your device is the limited data needed to process subscriptions and purchases, described below.
                     """
                 }
 
                 PolicySection(title: "Information We Do Not Collect") {
                     """
-                    EverShot Cam does not collect, transmit, or share any of the following:
+                    We do not collect, sell, or share:
 
-                    • Your name, email address, or any account information
+                    • Your name, email address, or contact information
                     • Your location or GPS data
-                    • Device identifiers or advertising IDs
-                    • Usage analytics or crash reports sent to our servers
-                    • Any video, audio, or photo content you record
+                    • Advertising identifiers — the App shows no ads
+                    • The video, audio, or photo content you record
                     """
                 }
 
                 PolicySection(title: "Camera and Microphone Access") {
                     """
-                    EverShot Cam requires access to your device's rear cameras and microphone solely to record video. This content is processed entirely on your device and is never uploaded, streamed, or transmitted anywhere.
+                    EverShot requires access to your device's cameras and microphone solely to record video. This content is processed entirely on your device and is never uploaded, streamed, or transmitted anywhere.
 
                     You can revoke camera and microphone access at any time in Settings → Privacy & Security on your iPhone.
                     """
@@ -42,7 +41,7 @@ struct PrivacyPolicyView: View {
 
                 PolicySection(title: "Photo Library Access") {
                     """
-                    After recording, EverShot Cam saves your video clips directly to your Photos library. The App requests write access to your photo library for this purpose only. We do not read, scan, or access any existing photos or videos in your library.
+                    After recording, EverShot saves your video clips directly to your Photos library. The App requests write access to your photo library for this purpose only. We do not read, scan, or access any existing photos or videos in your library.
 
                     You can manage this permission at any time in Settings → Privacy & Security → Photos on your iPhone.
                     """
@@ -50,19 +49,40 @@ struct PrivacyPolicyView: View {
 
                 PolicySection(title: "Data Storage") {
                     """
-                    All video files are stored locally on your device. Temporary working files created during recording are deleted automatically once the clips are saved to your Photos library. No data is stored on external servers.
+                    All video files are stored locally on your device. Temporary working files created during recording are deleted automatically once your clips are saved to Photos. Your recordings are never stored on our servers.
+                    """
+                }
+
+                PolicySection(title: "Subscriptions and Purchase Data") {
+                    """
+                    EverShot offers auto-renewing subscriptions. Purchases are processed by Apple through the App Store — we never receive or store your payment card details.
+
+                    To unlock features and manage your subscription, we use RevenueCat, Inc., a third-party service that records purchase events. For this purpose, RevenueCat and Apple may process a randomly generated app-user identifier, your subscription and purchase history, and basic device and country information.
+
+                    This data is used only to deliver and validate your subscription, prevent fraud, and understand aggregate purchase trends. It is never used to advertise to you and is not sold to anyone. You can review Apple's and RevenueCat's own privacy practices in their respective privacy policies.
                     """
                 }
 
                 PolicySection(title: "Third-Party Services") {
                     """
-                    EverShot Cam does not integrate any third-party SDKs, analytics tools, advertising networks, or crash reporting services. No data is shared with any third party.
+                    The App uses two third-party services, both solely to operate subscriptions:
+
+                    • Apple App Store — processes payments and manages billing.
+                    • RevenueCat — validates purchases and manages subscription status.
+
+                    The App contains no advertising networks and no other third-party analytics or tracking SDKs beyond what is described above.
+                    """
+                }
+
+                PolicySection(title: "Your Choices and Rights") {
+                    """
+                    Depending on where you live, you may have rights to access or delete the limited data associated with your purchases. Because that data is tied to an anonymous identifier held by Apple and RevenueCat, please contact us and we will help you exercise those rights.
                     """
                 }
 
                 PolicySection(title: "Children's Privacy") {
                     """
-                    EverShot Cam does not knowingly collect any information from anyone, including children under the age of 13. Since no data is collected at all, the App complies fully with the Children's Online Privacy Protection Act (COPPA).
+                    EverShot is not directed to children under 13, and we do not knowingly collect personal information from children under 13. If you believe a child has provided information through the App, please contact us and we will take appropriate steps to address it.
                     """
                 }
 

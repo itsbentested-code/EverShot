@@ -2,7 +2,7 @@ import SwiftUI
 
 struct TermsAndConditionsView: View {
 
-    private let lastUpdated = "April 2026"
+    private let lastUpdated = "July 2026"
 
     var body: some View {
         ScrollView {
@@ -14,21 +14,36 @@ struct TermsAndConditionsView: View {
 
                 TermsSection(title: "Acceptance of Terms") {
                     """
-                    By downloading or using EverShot Cam ("the App"), you agree to be bound by these Terms and Conditions. If you do not agree with any part of these terms, please do not use the App.
+                    By downloading or using EverShot ("the App"), you agree to be bound by these Terms and Conditions. If you do not agree with any part of these terms, please do not use the App.
                     """
                 }
 
                 TermsSection(title: "Use of the App") {
                     """
-                    EverShot Cam is provided for personal, non-commercial use. You agree to use the App only for lawful purposes and in a manner consistent with all applicable local, national, and international laws and regulations.
+                    EverShot is licensed to you for your personal use to create your own video content. You own the videos you record and may use them however you wish, including commercially.
 
-                    You are solely responsible for any content you record using the App, including ensuring you have the appropriate consent from any individuals who appear in your recordings.
+                    You agree to use the App only for lawful purposes and in a manner consistent with all applicable local, national, and international laws and regulations.
+                    """
+                }
+
+                TermsSection(title: "Subscriptions, Free Trial, and Billing") {
+                    """
+                    EverShot offers auto-renewing subscriptions that unlock the App's features:
+
+                    • A 7-day free trial, after which the subscription renews automatically at the price shown at the time of purchase (for example, $0.99/month or $9.99/year, in your local currency).
+                    • Payment is charged to your Apple ID account upon confirmation of purchase.
+                    • Your subscription automatically renews unless auto-renew is turned off at least 24 hours before the end of the current period.
+                    • Your account is charged for renewal within 24 hours before the end of the current period, at the then-current price.
+                    • You can manage or cancel your subscription in your Apple ID account settings after purchase. Deleting the App does not cancel your subscription.
+                    • If you begin a free trial and then purchase a subscription, any unused portion of the trial is forfeited.
+
+                    Prices are shown in your local currency, may vary by region, and may change over time in accordance with App Store rules.
                     """
                 }
 
                 TermsSection(title: "Recording Consent and Privacy Laws") {
                     """
-                    Recording individuals without their knowledge or consent may be illegal in your jurisdiction. It is your responsibility to understand and comply with all applicable recording consent laws before using EverShot Cam to capture video or audio of others.
+                    Recording individuals without their knowledge or consent may be illegal in your jurisdiction. It is your responsibility to understand and comply with all applicable recording consent laws before using EverShot to capture video or audio of others.
 
                     We are not liable for any recordings made in violation of applicable laws or the privacy rights of any individual.
                     """
@@ -44,13 +59,13 @@ struct TermsAndConditionsView: View {
 
                 TermsSection(title: "Your Content") {
                     """
-                    You retain full ownership of all video and audio content you create with EverShot Cam. We do not access, collect, or claim any rights over your recordings. All content stays on your device unless you choose to share it.
+                    You retain full ownership of all video and audio content you create with EverShot. We do not access, collect, or claim any rights over your recordings. All content stays on your device unless you choose to share it.
                     """
                 }
 
                 TermsSection(title: "No Warranty") {
                     """
-                    EverShot Cam is provided "as is" without warranties of any kind, either express or implied. We do not warrant that the App will be error-free, uninterrupted, or suitable for any particular purpose.
+                    EverShot is provided "as is" without warranties of any kind, either express or implied. We do not warrant that the App will be error-free, uninterrupted, or suitable for any particular purpose.
 
                     We are not responsible for any loss of recordings, data corruption, or device issues arising from use of the App.
                     """
@@ -59,6 +74,16 @@ struct TermsAndConditionsView: View {
                 TermsSection(title: "Limitation of Liability") {
                     """
                     To the fullest extent permitted by law, we shall not be liable for any indirect, incidental, special, or consequential damages arising out of your use of — or inability to use — the App, even if we have been advised of the possibility of such damages.
+                    """
+                }
+
+                TermsSection(title: "Apple App Store Terms") {
+                    """
+                    These Terms are between you and the developer of EverShot, not with Apple. Apple is not responsible for the App or its content, and has no obligation to provide any maintenance or support for the App.
+
+                    If the App fails to conform to any applicable warranty, you may notify Apple, and Apple will refund the purchase price (if any); to the maximum extent permitted by law, Apple has no other warranty obligation with respect to the App. Apple and its subsidiaries are third-party beneficiaries of these Terms and may enforce them against you.
+
+                    You represent that you are not located in a country subject to a U.S. Government embargo and that you are not listed on any U.S. Government restricted-parties list.
                     """
                 }
 
@@ -76,7 +101,7 @@ struct TermsAndConditionsView: View {
 
                 TermsSection(title: "Governing Law") {
                     """
-                    These terms are governed by and construed in accordance with the laws of the United States. Any disputes arising under these terms shall be subject to the exclusive jurisdiction of the courts located in the United States.
+                    These terms are governed by and construed in accordance with the laws of the State of Tennessee, United States, without regard to conflict-of-law principles. Any disputes arising under these terms shall be subject to the exclusive jurisdiction of the state and federal courts located in Tennessee.
                     """
                 }
 
