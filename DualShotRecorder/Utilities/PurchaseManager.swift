@@ -30,6 +30,10 @@ final class PurchaseManager: ObservableObject {
     // MARK: - Published state
     @Published private(set) var packages: [Package] = []
     @Published private(set) var isSubscribed: Bool = false
+    // False until we've gotten the first entitlement answer (cached or fetched).
+    // The app shows a brief launch splash until this is true so subscribers are
+    // never wrongly shown the paywall on cold launch.
+    @Published private(set) var hasResolvedEntitlement: Bool = false
     @Published private(set) var isLoadingProducts: Bool = false
     @Published var lastErrorMessage: String?
 
@@ -109,12 +113,15 @@ final class PurchaseManager: ObservableObject {
             let info = try await Purchases.shared.customerInfo()
             updateSubscription(info)
         } catch {
-            // Non-fatal — we'll get updates via the customerInfo stream.
+            // Couldn't reach RevenueCat and no cache — don't hang the launch
+            // splash forever; treat as "not subscribed" so the paywall shows.
+            hasResolvedEntitlement = true
         }
     }
 
     private func updateSubscription(_ info: CustomerInfo) {
         isSubscribed = info.entitlements[Self.entitlementID]?.isActive == true
+        hasResolvedEntitlement = true
     }
 
     private func observeCustomerInfo() -> Task<Void, Never> {

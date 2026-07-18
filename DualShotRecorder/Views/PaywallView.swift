@@ -22,7 +22,7 @@ struct PaywallView: View {
     // While false, closing the last-ditch offer lets the user into the app
     // (handy for testing the rest of the app). Flip to true to make EverShot a
     // true hard paywall — the user cannot enter until they subscribe.
-    private let hardPaywall = false
+    private let hardPaywall = true
 
     private enum Step { case intro, reminder, plans, lastDitch }
     @State private var step: Step = .intro

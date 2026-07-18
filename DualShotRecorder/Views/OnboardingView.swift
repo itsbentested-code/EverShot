@@ -20,7 +20,6 @@ private struct OnboardingPage {
 struct OnboardingView: View {
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
     @State private var currentPage = 0
-    @State private var showPaywall = false
 
     private let pages: [OnboardingPage] = [
         // Page 1 — Welcome
@@ -131,7 +130,9 @@ struct OnboardingView: View {
                         if currentPage < pages.count - 1 {
                             withAnimation { currentPage += 1 }
                         } else {
-                            showPaywall = true
+                            // Finished the intro — the app root now shows the paywall
+                            // (gated on subscription state).
+                            hasCompletedOnboarding = true
                         }
                     } label: {
                         Text(currentPage < pages.count - 1 ? "Next" : "Get Started")
@@ -147,12 +148,6 @@ struct OnboardingView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .fullScreenCover(isPresented: $showPaywall) {
-            PaywallView(onComplete: {
-                showPaywall = false
-                hasCompletedOnboarding = true
-            })
-        }
     }
 
     // MARK: - Page View

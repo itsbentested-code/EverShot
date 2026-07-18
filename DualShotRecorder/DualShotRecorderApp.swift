@@ -30,12 +30,20 @@ struct EverShotApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                if hasCompletedOnboarding {
+                if !purchaseManager.hasResolvedEntitlement {
+                    // Brief splash while RevenueCat resolves the subscription state.
+                    LaunchLoadingView()
+                } else if purchaseManager.isSubscribed {
+                    // Active trial or paid subscription — full access.
                     RecordingView()
                         .onAppear {
                             requestReviewIfNeeded()
                         }
+                } else if hasCompletedOnboarding {
+                    // Seen the intro but not subscribed (new or lapsed) — paywall.
+                    PaywallView(onComplete: {})
                 } else {
+                    // Brand-new user — intro pages, then the paywall.
                     OnboardingView()
                 }
             }
@@ -66,6 +74,18 @@ struct EverShotApp: App {
             try audioSession.setActive(true)
         } catch {
             print("EverShotApp: Failed to configure audio session: \(error)")
+        }
+    }
+}
+
+// Shown for the split second it takes RevenueCat to report subscription state,
+// so a paying user never flashes the paywall on launch.
+private struct LaunchLoadingView: View {
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            ProgressView()
+                .tint(.white)
         }
     }
 }
