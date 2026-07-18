@@ -7,6 +7,8 @@ struct SettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
 
+    @State private var showPaywallPreview = false
+
     // MARK: - Computed helpers
 
     private var storageSummary: String {
@@ -291,6 +293,19 @@ struct SettingsSheet: View {
                 #if DEBUG
                 Section {
                     Button {
+                        showPaywallPreview = true
+                    } label: {
+                        HStack {
+                            Text("Preview Paywall")
+                                .foregroundColor(.primary)
+                            Spacer()
+                            Image(systemName: "creditcard")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    Button {
                         UserDefaults.standard.set(false, forKey: "hasCompletedOnboarding")
                         dismiss()
                     } label: {
@@ -306,7 +321,7 @@ struct SettingsSheet: View {
                 } header: {
                     Text("Developer")
                 } footer: {
-                    Text("Shows the onboarding + paywall flow again on next launch. Only visible in debug builds.")
+                    Text("Preview Paywall opens the subscription flow right now, even if you're already subscribed — close it with the X. Reset Onboarding replays the intro pages on next launch (only works if you're not subscribed). Debug builds only.")
                 }
                 #endif
             }
@@ -319,6 +334,10 @@ struct SettingsSheet: View {
                     }
                     .fontWeight(.semibold)
                 }
+            }
+            .fullScreenCover(isPresented: $showPaywallPreview) {
+                PaywallView(onComplete: { showPaywallPreview = false },
+                            isPreview: true)
             }
         }
     }

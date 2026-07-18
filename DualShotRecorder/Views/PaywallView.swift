@@ -5,10 +5,9 @@ import RevenueCat
 ///
 /// Flow (mirrors the reference design):
 ///   1. intro      – "We want you to try EverShot for free."   → Try for $0.00
-///   2. reminder   – "We'll send you a reminder…"              → Continue for FREE
-///   3. plans      – "Start your 7-day FREE trial to continue" → triggers the
+///   2. plans      – "Start your 7-day FREE trial to continue" → triggers the
 ///                    native Apple purchase sheet
-///   4. lastDitch  – shown if the user cancels: a one-time discounted offer
+///   3. lastDitch  – shown if the user cancels: a one-time discounted offer
 ///
 /// `onComplete()` is called once the user has subscribed (or, while
 /// `hardPaywall` is false, once they've exhausted the flow) so the caller can
@@ -17,6 +16,10 @@ struct PaywallView: View {
 
     @EnvironmentObject private var purchases: PurchaseManager
     var onComplete: () -> Void
+
+    /// Debug-only: when true the paywall can be closed at any point, so you can
+    /// review the design from Settings without clearing your subscription.
+    var isPreview: Bool = false
 
     @Environment(\.openURL) private var openURL
     private let legalURL = URL(string: "https://www.bentested.com/evershot-legal")!
@@ -27,7 +30,7 @@ struct PaywallView: View {
     // true hard paywall — the user cannot enter until they subscribe.
     private let hardPaywall = true
 
-    private enum Step { case intro, reminder, plans, lastDitch }
+    private enum Step { case intro, plans, lastDitch }
     @State private var step: Step = .intro
     @State private var selectedID = PurchaseManager.yearlyID
     @State private var isPurchasing = false
@@ -51,7 +54,6 @@ struct PaywallView: View {
             Group {
                 switch step {
                 case .intro:     introScreen
-                case .reminder:  reminderScreen
                 case .plans:     plansScreen
                 case .lastDitch: lastDitchScreen
                 }
@@ -59,7 +61,7 @@ struct PaywallView: View {
             .transition(.opacity)
         }
         .preferredColorScheme(.light)
-        .interactiveDismissDisabled(true)
+        .interactiveDismissDisabled(!isPreview)
     }
 
     // MARK: - Screen 1: Intro
@@ -95,53 +97,16 @@ struct PaywallView: View {
 
             noPaymentLabel
             primaryButton(title: "Try for $0.00") {
-                withAnimation { step = .reminder }
-            }
-            trialCaption
-        }
-    }
-
-    // MARK: - Screen 2: Reminder
-    private var reminderScreen: some View {
-        VStack(spacing: 0) {
-            topBar(showBack: true) { withAnimation { step = .intro } }
-
-            Spacer()
-
-            Text("We'll send you\na reminder before your\nfree trial ends")
-                .font(.system(size: 30, weight: .heavy))
-                .multilineTextAlignment(.center)
-                .foregroundColor(.black)
-                .padding(.horizontal, 24)
-
-            ZStack(alignment: .topTrailing) {
-                Image(systemName: "bell.fill")
-                    .font(.system(size: 108))
-                    .foregroundColor(Color(white: 0.85))
-                Text("1")
-                    .font(.system(size: 26, weight: .bold))
-                    .foregroundColor(.white)
-                    .frame(width: 46, height: 46)
-                    .background(Circle().fill(Color.red))
-                    .offset(x: 18, y: -8)
-            }
-            .padding(.top, 60)
-
-            Spacer()
-            Spacer()
-
-            noPaymentLabel
-            primaryButton(title: "Continue for FREE") {
                 withAnimation { step = .plans }
             }
             trialCaption
         }
     }
 
-    // MARK: - Screen 3: Plans
+    // MARK: - Screen 2: Plans
     private var plansScreen: some View {
         VStack(spacing: 0) {
-            topBar(showBack: true) { withAnimation { step = .reminder } }
+            topBar(showBack: true) { withAnimation { step = .intro } }
 
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 0) {
@@ -157,10 +122,6 @@ struct PaywallView: View {
                         timelineRow(icon: "lock.open.fill", tint: .orange,
                                     title: "Today",
                                     detail: "Unlock everything — dual-lens recording, teleprompter, and more.",
-                                    isLast: false)
-                        timelineRow(icon: "bell.fill", tint: .orange,
-                                    title: "In 5 Days — Reminder",
-                                    detail: "We'll send you a reminder that your trial is ending soon.",
                                     isLast: false)
                         timelineRow(icon: "crown.fill", tint: .black,
                                     title: "In 7 Days — Billing Starts",
@@ -191,7 +152,8 @@ struct PaywallView: View {
         VStack(spacing: 0) {
             HStack {
                 Button {
-                    if hardPaywall { withAnimation { step = .plans } }
+                    if isPreview { onComplete() }
+                    else if hardPaywall { withAnimation { step = .plans } }
                     else { onComplete() }
                 } label: {
                     Image(systemName: "xmark")
@@ -268,6 +230,12 @@ struct PaywallView: View {
                 Button { backAction?() } label: {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 20, weight: .semibold))
+                        .foregroundColor(Color(white: 0.6))
+                }
+            } else if isPreview {
+                Button { onComplete() } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 18, weight: .semibold))
                         .foregroundColor(Color(white: 0.6))
                 }
             }
