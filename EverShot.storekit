@@ -1,0 +1,118 @@
+{
+  "identifier" : "A1B2C3D4-0000-0000-0000-EVERSHOT0001",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+
+  ],
+  "settings" : {
+    "_applicationInternalID" : "0000000000",
+    "_developerTeamID" : "68YKSZ6S84",
+    "_failTransactionsEnabled" : false,
+    "_lastSynchronizedDate" : 0,
+    "_locale" : "en_US",
+    "_storefront" : "USA",
+    "_storeKitErrors" : [
+
+    ]
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "20000001",
+      "localizations" : [
+
+      ],
+      "name" : "EverShot Pro",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "0.99",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "30000001",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "Unlock every EverShot feature, billed monthly.",
+              "displayName" : "EverShot Pro — Monthly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.bentested.EverShotCam.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "Monthly",
+          "subscriptionGroupID" : "20000001",
+          "type" : "RecurringSubscription"
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "9.99",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "30000002",
+          "introductoryOffer" : {
+            "internalID" : "40000002",
+            "paymentMode" : "free",
+            "subscriptionPeriod" : "P7D"
+          },
+          "localizations" : [
+            {
+              "description" : "Unlock every EverShot feature, billed yearly. Best value.",
+              "displayName" : "EverShot Pro — Yearly",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.bentested.EverShotCam.yearly",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "Yearly",
+          "subscriptionGroupID" : "20000001",
+          "type" : "RecurringSubscription"
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "7.99",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "30000003",
+          "introductoryOffer" : {
+            "internalID" : "40000003",
+            "paymentMode" : "free",
+            "subscriptionPeriod" : "P7D"
+          },
+          "localizations" : [
+            {
+              "description" : "Limited-time discounted yearly plan — 20% off, billed yearly.",
+              "displayName" : "EverShot Pro — Yearly (Offer)",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "com.bentested.EverShotCam.yearly.sale",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "Yearly Sale",
+          "subscriptionGroupID" : "20000001",
+          "type" : "RecurringSubscription"
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 3,
+    "minor" : 0
+  }
+}

@@ -1,17 +1,25 @@
 import SwiftUI
 import AVFoundation
 import StoreKit
+import RevenueCat
 
 @main
 struct EverShotApp: App {
 
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
 
+    // Owns subscription state; injected so the paywall (and anything else) can read it.
+    @StateObject private var purchaseManager = PurchaseManager()
+
     // Session gate — prevents the review prompt firing more than once per process launch
     // (onAppear can fire multiple times as sheets open/close).
     @State private var hasRequestedReviewThisSession = false
 
     init() {
+        // Initialize RevenueCat before anything reads subscription state.
+        Purchases.logLevel = .debug
+        Purchases.configure(withAPIKey: PurchaseManager.revenueCatAPIKey)
+
         configureAudioSession()
         // Increment exactly once per process launch using UserDefaults directly.
         // @AppStorage is not safe to write in init() before the property is fully initialized.
@@ -21,14 +29,17 @@ struct EverShotApp: App {
 
     var body: some Scene {
         WindowGroup {
-            if hasCompletedOnboarding {
-                RecordingView()
-                    .onAppear {
-                        requestReviewIfNeeded()
-                    }
-            } else {
-                OnboardingView()
+            Group {
+                if hasCompletedOnboarding {
+                    RecordingView()
+                        .onAppear {
+                            requestReviewIfNeeded()
+                        }
+                } else {
+                    OnboardingView()
+                }
             }
+            .environmentObject(purchaseManager)
         }
     }
 

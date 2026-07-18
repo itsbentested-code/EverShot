@@ -286,6 +286,29 @@ struct SettingsSheet: View {
                 } header: {
                     Text("About")
                 }
+
+                // MARK: Developer (debug builds only)
+                #if DEBUG
+                Section {
+                    Button {
+                        UserDefaults.standard.set(false, forKey: "hasCompletedOnboarding")
+                        dismiss()
+                    } label: {
+                        HStack {
+                            Text("Reset Onboarding")
+                                .foregroundColor(.primary)
+                            Spacer()
+                            Image(systemName: "arrow.counterclockwise")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("Developer")
+                } footer: {
+                    Text("Shows the onboarding + paywall flow again on next launch. Only visible in debug builds.")
+                }
+                #endif
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)

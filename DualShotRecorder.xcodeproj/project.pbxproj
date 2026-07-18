@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		0CDC63042FEB7DB900116A7E /* CallStateMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CDC63022FEB7DB900116A7E /* CallStateMonitor.swift */; };
 		0CDC63052FEB7DB900116A7E /* FrontBackRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CDC63032FEB7DB900116A7E /* FrontBackRecorder.swift */; };
+		0CF840C2300B052B0042E661 /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = 0CF840C1300B052B0042E661 /* RevenueCat */; };
 		A10000001 /* DualShotRecorderApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000001 /* DualShotRecorderApp.swift */; };
 		A10000002 /* RecordingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000002 /* RecordingView.swift */; };
 		A10000003 /* SettingsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000003 /* SettingsSheet.swift */; };
@@ -31,6 +32,8 @@
 		A10000021 /* LevelIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000021 /* LevelIndicator.swift */; };
 		A10000022 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000022 /* OnboardingView.swift */; };
 		A10000023 /* TeleprompterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000023 /* TeleprompterView.swift */; };
+		A10000024 /* PaywallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000024 /* PaywallView.swift */; };
+		A10000025 /* PurchaseManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000025 /* PurchaseManager.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -60,6 +63,9 @@
 		A20000021 /* LevelIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelIndicator.swift; sourceTree = "<group>"; };
 		A20000022 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		A20000023 /* TeleprompterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TeleprompterView.swift; sourceTree = "<group>"; };
+		A20000024 /* PaywallView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaywallView.swift; sourceTree = "<group>"; };
+		A20000025 /* PurchaseManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PurchaseManager.swift; sourceTree = "<group>"; };
+		A20000026 /* EverShot.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = EverShot.storekit; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -67,6 +73,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0CF840C2300B052B0042E661 /* RevenueCat in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -77,6 +84,7 @@
 			isa = PBXGroup;
 			children = (
 				A40000001 /* DualShotRecorder */,
+				A20000026 /* EverShot.storekit */,
 				A40000006 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -103,6 +111,7 @@
 				A20000021 /* LevelIndicator.swift */,
 				A20000022 /* OnboardingView.swift */,
 				A20000023 /* TeleprompterView.swift */,
+				A20000024 /* PaywallView.swift */,
 				A20000004 /* RecordButton.swift */,
 				A20000005 /* CropGuideOverlay.swift */,
 				A20000006 /* StorageEstimateView.swift */,
@@ -141,6 +150,7 @@
 				A20000014 /* PhotoLibrarySaver.swift */,
 				A20000015 /* PermissionsManager.swift */,
 				A20000016 /* DeviceCapabilities.swift */,
+				A20000025 /* PurchaseManager.swift */,
 			);
 			path = Utilities;
 			sourceTree = "<group>";
@@ -197,6 +207,9 @@
 				Base,
 			);
 			mainGroup = A40000000;
+			packageReferences = (
+				0CF840C0300B052B0042E661 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */,
+			);
 			productRefGroup = A40000006 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -245,6 +258,8 @@
 				0CDC63042FEB7DB900116A7E /* CallStateMonitor.swift in Sources */,
 				0CDC63052FEB7DB900116A7E /* FrontBackRecorder.swift in Sources */,
 				A10000019 /* TermsAndConditionsView.swift in Sources */,
+				A10000024 /* PaywallView.swift in Sources */,
+				A10000025 /* PurchaseManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -361,7 +376,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 9;
+				CURRENT_PROJECT_VERSION = 10;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = DualShotRecorder/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = EverShot;
@@ -374,7 +389,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.6;
 				PRODUCT_BUNDLE_IDENTIFIER = com.bentested.EverShotCam;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -391,7 +406,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 9;
+				CURRENT_PROJECT_VERSION = 10;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = DualShotRecorder/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = EverShot;
@@ -404,7 +419,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.5;
+				MARKETING_VERSION = 1.6;
 				PRODUCT_BUNDLE_IDENTIFIER = com.bentested.EverShotCam;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -437,6 +452,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		0CF840C0300B052B0042E661 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/RevenueCat/purchases-ios-spm.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 5.81.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		0CF840C1300B052B0042E661 /* RevenueCat */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 0CF840C0300B052B0042E661 /* XCRemoteSwiftPackageReference "purchases-ios-spm" */;
+			productName = RevenueCat;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = A90000001 /* Project object */;
 }
