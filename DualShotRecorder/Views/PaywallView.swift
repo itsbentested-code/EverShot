@@ -18,6 +18,9 @@ struct PaywallView: View {
     @EnvironmentObject private var purchases: PurchaseManager
     var onComplete: () -> Void
 
+    @Environment(\.openURL) private var openURL
+    private let legalURL = URL(string: "https://www.bentested.com/evershot-legal")!
+
     // MARK: Ship switch
     // While false, closing the last-ditch offer lets the user into the app
     // (handy for testing the rest of the app). Flip to true to make EverShot a
@@ -179,7 +182,7 @@ struct PaywallView: View {
                 startTrial()
             }
             .disabled(isPurchasing)
-            trialCaption
+            purchaseFooter
         }
     }
 
@@ -251,7 +254,9 @@ struct PaywallView: View {
             .font(.system(size: 15, weight: .semibold))
             .foregroundColor(.black)
             .padding(.top, 16)
-            .padding(.bottom, 40)
+            .padding(.bottom, 10)
+
+            purchaseFooter
         }
     }
 
@@ -446,6 +451,28 @@ struct PaywallView: View {
             .foregroundColor(.gray)
             .padding(.top, 12)
             .padding(.bottom, 24)
+    }
+
+    // Shown on the purchase screens. Apple requires the auto-renew disclosure
+    // plus functional Terms of Use and Privacy Policy links where the user buys.
+    private var purchaseFooter: some View {
+        VStack(spacing: 10) {
+            Text("7 days free, then \(monthlyPrice)/month. Payment is charged to your Apple ID at confirmation. Subscriptions renew automatically unless cancelled at least 24 hours before the end of the period; manage or cancel anytime in your Apple ID settings.")
+                .font(.system(size: 11))
+                .foregroundColor(.gray)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 24)
+
+            HStack(spacing: 20) {
+                Button("Terms of Use") { openURL(legalURL) }
+                Button("Privacy Policy") { openURL(legalURL) }
+            }
+            .font(.system(size: 12, weight: .medium))
+            .foregroundColor(Color(white: 0.5))
+        }
+        .padding(.top, 8)
+        .padding(.bottom, 20)
     }
 
     private func primaryButton(title: String, action: @escaping () -> Void) -> some View {
