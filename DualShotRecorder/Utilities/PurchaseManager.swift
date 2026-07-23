@@ -26,6 +26,8 @@ final class PurchaseManager: ObservableObject {
     static let monthlyID    = "com.bentested.EverShotCam.monthly"
     static let yearlyID     = "com.bentested.EverShotCam.yearly"
     static let yearlySaleID = "com.bentested.EverShotCam.yearly.sale"
+    // One-time, non-consumable "buy once, own forever" unlock.
+    static let lifetimeID   = "com.bentested.EverShotCam.lifetime"
 
     // MARK: - Published state
     @Published private(set) var packages: [Package] = []
@@ -59,6 +61,7 @@ final class PurchaseManager: ObservableObject {
     var monthly: Package?    { package(for: Self.monthlyID) }
     var yearly: Package?     { package(for: Self.yearlyID) }
     var yearlySale: Package? { package(for: Self.yearlySaleID) }
+    var lifetime: Package?   { package(for: Self.lifetimeID) }
 
     /// Localized price string, falling back to a hardcoded value so the paywall
     /// still looks right before the offering loads (or in Xcode Previews).

@@ -1,44 +1,40 @@
 import SwiftUI
 import RevenueCat
 
-/// The subscription paywall shown as the final step of onboarding.
+/// Paywall shown as the final step of onboarding.
 ///
-/// Flow (mirrors the reference design):
-///   1. intro      – "We want you to try EverShot for free."   → Try for $0.00
-///   2. plans      – "Start your 7-day FREE trial to continue" → triggers the
-///                    native Apple purchase sheet
-///   3. lastDitch  – shown if the user cancels: a one-time discounted offer
+/// Three options:
+///   • Monthly  – subscription, $0.99/mo, 7-day free trial
+///   • Yearly   – subscription, $9.99/yr, 7-day free trial (default / most popular)
+///   • Lifetime – one-time non-consumable, $14.99, no trial (pay once, own forever)
 ///
-/// `onComplete()` is called once the user has subscribed (or, while
-/// `hardPaywall` is false, once they've exhausted the flow) so the caller can
-/// dismiss the paywall and enter the app.
+/// `onComplete()` runs once the user unlocks access (subscribes or buys lifetime).
 struct PaywallView: View {
 
     @EnvironmentObject private var purchases: PurchaseManager
     var onComplete: () -> Void
 
-    /// Debug-only: when true the paywall can be closed at any point, so you can
-    /// review the design from Settings without clearing your subscription.
+    /// Debug-only: when true the paywall can be closed at any point (Settings preview).
     var isPreview: Bool = false
 
     @Environment(\.openURL) private var openURL
     private let legalURL = URL(string: "https://www.bentested.com/evershot-legal")!
 
-    // MARK: Ship switch
-    // While false, closing the last-ditch offer lets the user into the app
-    // (handy for testing the rest of the app). Flip to true to make EverShot a
-    // true hard paywall — the user cannot enter until they subscribe.
-    private let hardPaywall = true
-
-    private enum Step { case intro, plans, lastDitch }
+    private enum Step { case intro, plans }
     @State private var step: Step = .intro
     @State private var selectedID = PurchaseManager.yearlyID
     @State private var isPurchasing = false
 
-    // MARK: Prices (localized when products load, else these fallbacks)
-    private var monthlyPrice: String { purchases.displayPrice(for: PurchaseManager.monthlyID, fallback: "$0.99") }
-    private var yearlyPrice: String  { purchases.displayPrice(for: PurchaseManager.yearlyID, fallback: "$9.99") }
-    private var salePrice: String    { purchases.displayPrice(for: PurchaseManager.yearlySaleID, fallback: "$7.99") }
+    // MARK: Prices (localized when the offering loads, else these fallbacks)
+    private var monthlyPrice: String  { purchases.displayPrice(for: PurchaseManager.monthlyID,  fallback: "$0.99") }
+    private var yearlyPrice: String   { purchases.displayPrice(for: PurchaseManager.yearlyID,   fallback: "$9.99") }
+    private var lifetimePrice: String { purchases.displayPrice(for: PurchaseManager.lifetimeID, fallback: "$14.99") }
+
+    private var isLifetimeSelected: Bool { selectedID == PurchaseManager.lifetimeID }
+
+    private var selectedBillingText: String {
+        selectedID == PurchaseManager.monthlyID ? "\(monthlyPrice)/month" : "\(yearlyPrice)/year"
+    }
 
     private var billingDate: String {
         let date = Calendar.current.date(byAdding: .day, value: 7, to: Date()) ?? Date()
@@ -53,9 +49,8 @@ struct PaywallView: View {
             Color.white.ignoresSafeArea()
             Group {
                 switch step {
-                case .intro:     introScreen
-                case .plans:     plansScreen
-                case .lastDitch: lastDitchScreen
+                case .intro: introScreen
+                case .plans: plansScreen
                 }
             }
             .transition(.opacity)
@@ -99,7 +94,13 @@ struct PaywallView: View {
             primaryButton(title: "Try for $0.00") {
                 withAnimation { step = .plans }
             }
-            trialCaption
+            Text("7-day free trial, or unlock forever with a one-time purchase.")
+                .font(.system(size: 13))
+                .foregroundColor(.gray)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+                .padding(.top, 12)
+                .padding(.bottom, 24)
         }
     }
 
@@ -110,7 +111,7 @@ struct PaywallView: View {
 
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 0) {
-                    Text("Start your 7-day FREE\ntrial to continue.")
+                    Text(isLifetimeSelected ? "Own EverShot,\nyours forever." : "Start your 7-day FREE\ntrial to continue.")
                         .font(.system(size: 32, weight: .heavy))
                         .multilineTextAlignment(.leading)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -118,108 +119,55 @@ struct PaywallView: View {
                         .padding(.horizontal, 28)
                         .padding(.top, 12)
 
-                    VStack(spacing: 0) {
-                        timelineRow(icon: "lock.open.fill", tint: .orange,
-                                    title: "Today",
-                                    detail: "Unlock everything — dual-lens recording, teleprompter, and more.",
-                                    isLast: false)
-                        timelineRow(icon: "crown.fill", tint: .black,
-                                    title: "In 7 Days — Billing Starts",
-                                    detail: "You'll be charged on \(billingDate) unless you cancel anytime before.",
-                                    isLast: true)
+                    if isLifetimeSelected {
+                        VStack(alignment: .leading, spacing: 18) {
+                            valueRow(icon: "checkmark.seal.fill", text: "Pay once — no subscription, ever.")
+                            valueRow(icon: "infinity", text: "Every feature unlocked, forever.")
+                            valueRow(icon: "iphone", text: "Works on your devices with the same Apple ID.")
+                        }
+                        .padding(.top, 28)
+                        .padding(.horizontal, 28)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        VStack(spacing: 0) {
+                            timelineRow(icon: "lock.open.fill", tint: .orange,
+                                        title: "Today",
+                                        detail: "Unlock everything — dual-lens recording, teleprompter, and more.",
+                                        isLast: false)
+                            timelineRow(icon: "crown.fill", tint: .black,
+                                        title: "In 7 Days — Billing Starts",
+                                        detail: "You'll be charged \(selectedBillingText) on \(billingDate) unless you cancel anytime before.",
+                                        isLast: true)
+                        }
+                        .padding(.top, 28)
+                        .padding(.horizontal, 28)
                     }
-                    .padding(.top, 28)
-                    .padding(.horizontal, 28)
                 }
             }
 
             planSelector
                 .padding(.horizontal, 20)
-                .padding(.top, 8)
+                .padding(.top, 10)
 
-            noPaymentLabel
-                .padding(.top, 20)
-            primaryButton(title: isPurchasing ? "Please wait…" : "Start My 7-Day Free Trial") {
-                startTrial()
+            if isLifetimeSelected {
+                Spacer().frame(height: 14)
+            } else {
+                noPaymentLabel
+                    .padding(.top, 18)
+            }
+
+            primaryButton(title: buttonTitle) {
+                startPurchase()
             }
             .disabled(isPurchasing)
+
             purchaseFooter
         }
     }
 
-    // MARK: - Screen 4: Last-ditch offer
-    private var lastDitchScreen: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Button {
-                    if isPreview { onComplete() }
-                    else if hardPaywall { withAnimation { step = .plans } }
-                    else { onComplete() }
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundColor(.black)
-                }
-                Spacer()
-            }
-            .padding(.horizontal, 24)
-            .padding(.top, 12)
-
-            Spacer()
-
-            Text("Your one-time offer")
-                .font(.system(size: 34, weight: .heavy))
-                .foregroundColor(.black)
-
-            ZStack {
-                RoundedRectangle(cornerRadius: 18)
-                    .fill(LinearGradient(colors: [Color(white: 0.28), Color(white: 0.12)],
-                                         startPoint: .top, endPoint: .bottom))
-                    .frame(width: 180, height: 108)
-                Text("20% OFF\nFOREVER")
-                    .font(.system(size: 26, weight: .heavy))
-                    .foregroundColor(.white)
-                    .multilineTextAlignment(.center)
-            }
-            .padding(.top, 24)
-
-            HStack(spacing: 10) {
-                Text(yearlyPrice)
-                    .font(.system(size: 26, weight: .bold))
-                    .foregroundColor(.black)
-                    .strikethrough()
-                Text("\(salePrice)/yr")
-                    .font(.system(size: 26, weight: .bold))
-                    .foregroundColor(.black)
-            }
-            .padding(.top, 24)
-
-            Text("Once you close this one-time offer, it's gone!")
-                .font(.system(size: 15))
-                .foregroundColor(.gray)
-                .padding(.top, 16)
-
-            Spacer()
-
-            saleCard
-                .padding(.horizontal, 20)
-
-            primaryButton(title: isPurchasing ? "Please wait…" : "Start Free Trial") {
-                startSaleTrial()
-            }
-            .disabled(isPurchasing)
-
-            HStack(spacing: 6) {
-                Image(systemName: "checkmark")
-                Text("No Commitment — Cancel Anytime")
-            }
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundColor(.black)
-            .padding(.top, 16)
-            .padding(.bottom, 10)
-
-            purchaseFooter
-        }
+    private var buttonTitle: String {
+        if isPurchasing { return "Please wait…" }
+        return isLifetimeSelected ? "Unlock Forever — \(lifetimePrice)" : "Start My 7-Day Free Trial"
     }
 
     // MARK: - Reusable pieces
@@ -264,6 +212,19 @@ struct PaywallView: View {
                     .foregroundColor(.gray)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+
+    private func valueRow(icon: String, text: String) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: icon)
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundColor(.orange)
+                .frame(width: 28)
+            Text(text)
+                .font(.system(size: 17))
+                .foregroundColor(.black)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -315,92 +276,64 @@ struct PaywallView: View {
         }
     }
 
+    // MARK: - Plan selector (vertical list of three)
     private var planSelector: some View {
-        HStack(spacing: 12) {
-            planCard(id: PurchaseManager.monthlyID,
-                     title: "Monthly",
-                     price: "\(monthlyPrice)/mo",
-                     badge: nil)
-            planCard(id: PurchaseManager.yearlyID,
-                     title: "Yearly",
-                     price: "\(yearlyPrice)/yr",
-                     badge: "Most Popular")
+        VStack(spacing: 10) {
+            planRow(id: PurchaseManager.monthlyID, title: "Monthly",
+                    price: "\(monthlyPrice)/mo", note: "7-day free trial", badge: nil)
+            planRow(id: PurchaseManager.yearlyID, title: "Yearly",
+                    price: "\(yearlyPrice)/yr", note: "7-day free trial", badge: "Most Popular")
+            planRow(id: PurchaseManager.lifetimeID, title: "Lifetime",
+                    price: lifetimePrice, note: "One-time — pay once, own forever", badge: nil)
         }
     }
 
-    private func planCard(id: String, title: String, price: String, badge: String?) -> some View {
+    private func planRow(id: String, title: String, price: String, note: String?, badge: String?) -> some View {
         let selected = selectedID == id
         return Button {
-            selectedID = id
+            withAnimation(.easeInOut(duration: 0.15)) { selectedID = id }
         } label: {
-            ZStack(alignment: .top) {
-                RoundedRectangle(cornerRadius: 14)
-                    .stroke(selected ? Color.black : Color(white: 0.8),
-                            lineWidth: selected ? 2.5 : 1.5)
-                    .background(RoundedRectangle(cornerRadius: 14).fill(Color.white))
+            HStack(spacing: 12) {
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 22))
+                    .foregroundColor(selected ? .black : Color(white: 0.75))
 
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 8) {
                         Text(title)
-                            .font(.system(size: 20, weight: .semibold))
+                            .font(.system(size: 17, weight: .semibold))
                             .foregroundColor(.black)
-                        Text(price)
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundColor(.black)
+                        if let badge {
+                            Text(badge)
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Capsule().fill(Color.black))
+                        }
                     }
-                    Spacer()
-                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 22))
-                        .foregroundColor(selected ? .black : Color(white: 0.7))
+                    if let note {
+                        Text(note)
+                            .font(.system(size: 13))
+                            .foregroundColor(.gray)
+                    }
                 }
-                .padding(16)
 
-                if let badge {
-                    Text(badge)
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 5)
-                        .background(Capsule().fill(Color.black))
-                        .offset(y: -12)
-                }
-            }
-            .frame(height: 88)
-        }
-        .buttonStyle(.plain)
-    }
+                Spacer(minLength: 8)
 
-    private var saleCard: some View {
-        ZStack(alignment: .top) {
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(Color.black, lineWidth: 2)
-                .background(RoundedRectangle(cornerRadius: 14).fill(Color.white))
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Yearly Plan")
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundColor(.black)
-                    Text("12 mo • \(salePrice)")
-                        .font(.system(size: 14))
-                        .foregroundColor(.gray)
-                }
-                Spacer()
-                Text("\(salePrice)/yr")
-                    .font(.system(size: 20, weight: .semibold))
+                Text(price)
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundColor(.black)
             }
-            .padding(16)
-
-            Text("7-DAY FREE TRIAL")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundColor(.white)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 5)
-                .background(Capsule().fill(Color.black))
-                .offset(y: -12)
+            .padding(.horizontal, 16)
+            .frame(height: 68)
+            .background(
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(selected ? Color.black : Color(white: 0.82),
+                            lineWidth: selected ? 2.5 : 1.5)
+            )
         }
-        .frame(height: 88)
-        .padding(.bottom, 12)
+        .buttonStyle(.plain)
     }
 
     private var noPaymentLabel: some View {
@@ -413,19 +346,13 @@ struct PaywallView: View {
         .padding(.bottom, 12)
     }
 
-    private var trialCaption: some View {
-        Text("7 days free, then \(monthlyPrice)/month")
-            .font(.system(size: 14))
-            .foregroundColor(.gray)
-            .padding(.top, 12)
-            .padding(.bottom, 24)
-    }
-
-    // Shown on the purchase screens. Apple requires the auto-renew disclosure
-    // plus functional Terms of Use and Privacy Policy links where the user buys.
+    // Apple requires the auto-renew disclosure (for subscriptions) plus functional
+    // Terms of Use and Privacy Policy links where the user buys.
     private var purchaseFooter: some View {
         VStack(spacing: 10) {
-            Text("7 days free, then \(monthlyPrice)/month. Payment is charged to your Apple ID at confirmation. Subscriptions renew automatically unless cancelled at least 24 hours before the end of the period; manage or cancel anytime in your Apple ID settings.")
+            Text(isLifetimeSelected
+                 ? "One-time purchase of \(lifetimePrice). No subscription and no recurring charges — EverShot is yours forever."
+                 : "7 days free, then \(selectedBillingText). Payment is charged to your Apple ID at confirmation. Your subscription renews automatically unless cancelled at least 24 hours before the end of the period; manage or cancel anytime in your Apple ID settings.")
                 .font(.system(size: 11))
                 .foregroundColor(.gray)
                 .multilineTextAlignment(.center)
@@ -456,41 +383,13 @@ struct PaywallView: View {
     }
 
     // MARK: - Actions
-    private var selectedPackage: Package? {
-        purchases.package(for: selectedID)
-    }
-
-    private func startTrial() {
+    private func startPurchase() {
         isPurchasing = true
         Task { @MainActor in
             defer { isPurchasing = false }
-            guard let package = selectedPackage else {
-                // Offering not loaded yet (e.g. RevenueCat products not configured) —
-                // fall through to the last-ditch offer so the flow is still testable.
-                withAnimation { step = .lastDitch }
-                return
-            }
+            guard let package = purchases.package(for: selectedID) else { return }
             let success = await purchases.purchase(package)
-            if success {
-                onComplete()
-            } else {
-                withAnimation { step = .lastDitch }
-            }
-        }
-    }
-
-    private func startSaleTrial() {
-        isPurchasing = true
-        Task { @MainActor in
-            defer { isPurchasing = false }
-            guard let package = purchases.yearlySale ?? purchases.yearly else {
-                if !hardPaywall { onComplete() }
-                return
-            }
-            let success = await purchases.purchase(package)
-            if success || !hardPaywall {
-                onComplete()
-            }
+            if success { onComplete() }
         }
     }
 

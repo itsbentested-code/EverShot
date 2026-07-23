@@ -4,7 +4,21 @@
 
   ],
   "products" : [
-
+    {
+      "displayPrice" : "14.99",
+      "familyShareable" : false,
+      "internalID" : "50000001",
+      "localizations" : [
+        {
+          "description" : "Unlock every EverShot feature forever with a single one-time purchase.",
+          "displayName" : "EverShot Lifetime",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "com.bentested.EverShotCam.lifetime",
+      "referenceName" : "Lifetime",
+      "type" : "NonConsumable"
+    }
   ],
   "settings" : {
     "_applicationInternalID" : "0000000000",
