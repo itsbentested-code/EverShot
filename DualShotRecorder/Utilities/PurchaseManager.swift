@@ -100,6 +100,30 @@ final class PurchaseManager: ObservableObject {
         }
     }
 
+    /// Purchase by product ID. Uses the offering package when available, but
+    /// falls back to fetching the StoreProduct directly — so a product works even
+    /// if it isn't in the current offering (e.g. a freshly added one-time unlock).
+    @discardableResult
+    func purchase(productID: String) async -> Bool {
+        if let package = package(for: productID) {
+            return await purchase(package)
+        }
+        let products = await Purchases.shared.products([productID])
+        guard let product = products.first else {
+            lastErrorMessage = "This option isn't available yet — it can take a little while for a new product to go live. Please try again shortly."
+            return false
+        }
+        do {
+            let result = try await Purchases.shared.purchase(product: product)
+            if result.userCancelled { return false }
+            updateSubscription(result.customerInfo)
+            return isSubscribed
+        } catch {
+            lastErrorMessage = error.localizedDescription
+            return false
+        }
+    }
+
     // MARK: - Restore
     func restore() async {
         do {

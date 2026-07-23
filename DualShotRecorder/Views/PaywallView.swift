@@ -22,8 +22,9 @@ struct PaywallView: View {
 
     private enum Step { case intro, plans }
     @State private var step: Step = .intro
-    @State private var selectedID = PurchaseManager.yearlyID
+    @State private var selectedID = PurchaseManager.monthlyID
     @State private var isPurchasing = false
+    @State private var errorMessage: String?
 
     // MARK: Prices (localized when the offering loads, else these fallbacks)
     private var monthlyPrice: String  { purchases.displayPrice(for: PurchaseManager.monthlyID,  fallback: "$0.99") }
@@ -57,6 +58,13 @@ struct PaywallView: View {
         }
         .preferredColorScheme(.light)
         .interactiveDismissDisabled(!isPreview)
+        .alert("Purchase Unavailable",
+               isPresented: Binding(get: { errorMessage != nil },
+                                    set: { if !$0 { errorMessage = nil } })) {
+            Button("OK", role: .cancel) { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
+        }
     }
 
     // MARK: - Screen 1: Intro
@@ -280,9 +288,9 @@ struct PaywallView: View {
     private var planSelector: some View {
         VStack(spacing: 10) {
             planRow(id: PurchaseManager.monthlyID, title: "Monthly",
-                    price: "\(monthlyPrice)/mo", note: "7-day free trial", badge: nil)
+                    price: "\(monthlyPrice)/mo", note: "7-day free trial", badge: "Most Popular")
             planRow(id: PurchaseManager.yearlyID, title: "Yearly",
-                    price: "\(yearlyPrice)/yr", note: "7-day free trial", badge: "Most Popular")
+                    price: "\(yearlyPrice)/yr", note: "7-day free trial", badge: nil)
             planRow(id: PurchaseManager.lifetimeID, title: "Lifetime",
                     price: lifetimePrice, note: "One-time — pay once, own forever", badge: nil)
         }
@@ -387,9 +395,12 @@ struct PaywallView: View {
         isPurchasing = true
         Task { @MainActor in
             defer { isPurchasing = false }
-            guard let package = purchases.package(for: selectedID) else { return }
-            let success = await purchases.purchase(package)
-            if success { onComplete() }
+            let success = await purchases.purchase(productID: selectedID)
+            if success {
+                onComplete()
+            } else if let message = purchases.lastErrorMessage {
+                errorMessage = message
+            }
         }
     }
 
