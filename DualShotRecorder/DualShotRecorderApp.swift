@@ -30,7 +30,13 @@ struct EverShotApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                if !purchaseManager.hasResolvedEntitlement {
+                if purchaseManager.isGrandfathered {
+                    // Downloaded before the paywall — free full access, forever.
+                    RecordingView()
+                        .onAppear {
+                            requestReviewIfNeeded()
+                        }
+                } else if !purchaseManager.hasResolvedEntitlement {
                     // Brief splash while RevenueCat resolves the subscription state.
                     LaunchLoadingView()
                 } else if purchaseManager.isSubscribed {

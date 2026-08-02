@@ -29,9 +29,17 @@ final class PurchaseManager: ObservableObject {
     // One-time, non-consumable "buy once, own forever" unlock.
     static let lifetimeID   = "com.bentested.EverShotCam.lifetime"
 
+    // Grandfathering: the build number that first shipped the paywall (1.7 = build 11).
+    // Anyone whose ORIGINAL download was before this build had the free app first,
+    // so they keep full access forever without paying.
+    static let paywallBuildNumber = 11
+
     // MARK: - Published state
     @Published private(set) var packages: [Package] = []
     @Published private(set) var isSubscribed: Bool = false
+    // True for users who downloaded EverShot before the paywall (see paywallBuildNumber).
+    // Persisted so it survives offline launches and can't be reset by reinstalling.
+    @Published private(set) var isGrandfathered: Bool = UserDefaults.standard.bool(forKey: "isGrandfatheredUser")
     // False until we've gotten the first entitlement answer (cached or fetched).
     // The app shows a brief launch splash until this is true so subscribers are
     // never wrongly shown the paywall on cold launch.
@@ -148,7 +156,22 @@ final class PurchaseManager: ObservableObject {
 
     private func updateSubscription(_ info: CustomerInfo) {
         isSubscribed = info.entitlements[Self.entitlementID]?.isActive == true
+        markGrandfatheredIfNeeded(info)
         hasResolvedEntitlement = true
+    }
+
+    /// Grants permanent free access to anyone whose original App Store download
+    /// predates the paywall. `originalApplicationVersion` is the build number of
+    /// the version the user FIRST downloaded — it never changes and can't be
+    /// reset by reinstalling, so this is airtight. Only ever flips to true.
+    private func markGrandfatheredIfNeeded(_ info: CustomerInfo) {
+        guard !isGrandfathered else { return }
+        if let original = info.originalApplicationVersion,
+           let build = Int(original),
+           build < Self.paywallBuildNumber {
+            isGrandfathered = true
+            UserDefaults.standard.set(true, forKey: "isGrandfatheredUser")
+        }
     }
 
     private func observeCustomerInfo() -> Task<Void, Never> {
