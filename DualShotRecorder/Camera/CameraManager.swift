@@ -670,13 +670,14 @@ final class CameraManager: NSObject, ObservableObject {
         session.commitConfiguration()
 
         // Main preview layer — full-screen viewfinder.
-        // Un-mirrored so the preview matches the (un-mirrored) saved file exactly.
+        // Mirrored for a natural selfie feel (like the native Camera). The recording
+        // output stays un-mirrored so exported text/logos read correctly for viewers.
         let preview = AVCaptureVideoPreviewLayer(session: session)
         preview.videoGravity = .resizeAspectFill
         if let connection = preview.connection {
             connection.videoOrientation = .portrait
             connection.automaticallyAdjustsVideoMirroring = false
-            connection.isVideoMirrored = false
+            connection.isVideoMirrored = true
         }
 
         // Recorder — portrait + landscape both derived in software from the single front
@@ -875,7 +876,7 @@ final class CameraManager: NSObject, ObservableObject {
         if let connection = preview.connection {
             connection.videoOrientation = .portrait
             connection.automaticallyAdjustsVideoMirroring = false
-            connection.isVideoMirrored = false  // un-mirrored to match the saved file
+            connection.isVideoMirrored = true   // mirrored for a natural selfie preview (recording stays un-mirrored)
         }
 
         let recorder = SingleLensRecorder(
@@ -1033,7 +1034,7 @@ final class CameraManager: NSObject, ObservableObject {
         let frontPreviewConn = AVCaptureConnection(inputPort: frontVideoPort, videoPreviewLayer: frontPreview)
         frontPreviewConn.videoOrientation = .portrait
         frontPreviewConn.automaticallyAdjustsVideoMirroring = false
-        frontPreviewConn.isVideoMirrored = false // un-mirrored to match the saved (un-mirrored) file
+        frontPreviewConn.isVideoMirrored = true // mirrored for a natural selfie preview (recording stays un-mirrored)
         if session.canAddConnection(frontPreviewConn) { session.addConnection(frontPreviewConn) }
 
         // --- Recorder ---

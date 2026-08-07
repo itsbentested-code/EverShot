@@ -120,9 +120,19 @@ struct SettingsSheet: View {
                         .pickerStyle(.segmented)
 
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("Script")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                            HStack {
+                                Text("Script")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                if !settings.teleprompterText.isEmpty {
+                                    Button("Clear") {
+                                        settings.teleprompterText = ""
+                                    }
+                                    .font(.caption)
+                                    .foregroundColor(.red)
+                                }
+                            }
                             TextEditor(text: $settings.teleprompterText)
                                 .frame(minHeight: 120)
                                 .font(.system(size: 15))
