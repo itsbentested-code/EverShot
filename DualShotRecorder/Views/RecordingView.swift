@@ -103,6 +103,8 @@ struct RecordingView: View {
     // nil = default position (centered above record button)
     @State private var thumbnailPosition: CGPoint? = nil
     @State private var thumbnailDragOffset: CGSize = .zero
+    // Front/Back mode's portrait PiP tracks its own position separately.
+    @State private var fbThumbnailPosition: CGPoint? = nil
 
 
     // PiP thumbnail dimensions (15% larger than the previous 180×101)
@@ -158,6 +160,9 @@ struct RecordingView: View {
             if let saved = settings.savedThumbnailPosition {
                 thumbnailPosition = saved
             }
+            if let savedFB = settings.savedFrontBackThumbnailPosition {
+                fbThumbnailPosition = savedFB
+            }
         }
         .task {
             // Only requests permissions on first launch.
@@ -192,6 +197,13 @@ struct RecordingView: View {
                     showSaveConfirmation = false
                 }
             }
+        }
+        .alert("Couldn't Save to Photos",
+               isPresented: Binding(get: { cameraManager.saveError != nil },
+                                    set: { if !$0 { cameraManager.saveError = nil } })) {
+            Button("OK", role: .cancel) { cameraManager.saveError = nil }
+        } message: {
+            Text("Don't worry — your recording is safe. We couldn't add it to Photos (usually Photos access is off, or storage is full). Open Settings → Recover Unsaved Recordings to save it.")
         }
         .onChange(of: cameraManager.zoomFactor) { factor in
             if factor == 1.0 { lastZoomFactor = 1.0 }
@@ -412,11 +424,11 @@ struct RecordingView: View {
                       y: pipH / 2 + 64)
             : CGPoint(x: geo.size.width / 2,
                       y: geo.size.height - thumbH / 2 - thumbBottomInset)
-        // Front/Back pins the PiP to a fixed top-right slot. It must NOT inherit the
-        // draggable position saved by the (shorter, landscape) PiP in other modes —
-        // that value lands the taller portrait PiP in the corner, clipped off-screen.
-        let base = isFB ? defaultPos : (thumbnailPosition ?? defaultPos)
-        let display = isFB ? base : CGPoint(
+        // Front/Back keeps its own saved position (tracked separately from the shorter,
+        // landscape PiP used by other modes — sharing it would clip the taller portrait
+        // PiP off-screen). Both modes are freely draggable and snap to corners.
+        let base = isFB ? (fbThumbnailPosition ?? defaultPos) : (thumbnailPosition ?? defaultPos)
+        let display = CGPoint(
             x: base.x + thumbnailDragOffset.width,
             y: base.y + thumbnailDragOffset.height
         )
@@ -444,12 +456,14 @@ struct RecordingView: View {
                                     x: base.x + v.translation.width,
                                     y: base.y + v.translation.height
                                 )
-                                let snapped = snapToCorner(dropped, in: geo.size)
+                                let snapped = snapToCorner(dropped, in: geo.size, pipW: pipW, pipH: pipH)
                                 withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
-                                    thumbnailPosition = snapped
+                                    if isFB { fbThumbnailPosition = snapped }
+                                    else    { thumbnailPosition   = snapped }
                                     thumbnailDragOffset = .zero
                                 }
-                                settings.savedThumbnailPosition = snapped
+                                if isFB { settings.savedFrontBackThumbnailPosition = snapped }
+                                else    { settings.savedThumbnailPosition          = snapped }
                             }
                     )
             } else if settings.dualLensUseFrontCamera && !settings.isSingleLensMode {
@@ -470,7 +484,7 @@ struct RecordingView: View {
                                 x: base.x + v.translation.width,
                                 y: base.y + v.translation.height
                             )
-                            let snapped = snapToCorner(dropped, in: geo.size)
+                            let snapped = snapToCorner(dropped, in: geo.size, pipW: thumbW, pipH: thumbH)
                             withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
                                 thumbnailPosition = snapped
                                 thumbnailDragOffset = .zero
@@ -484,9 +498,9 @@ struct RecordingView: View {
 
     /// Snaps a dragged point to the nearest of four corners, respecting
     /// the top-bar and record-button safe areas.
-    private func snapToCorner(_ point: CGPoint, in size: CGSize) -> CGPoint {
-        let hw = thumbW / 2 + thumbPad
-        let hh = thumbH / 2 + thumbPad
+    private func snapToCorner(_ point: CGPoint, in size: CGSize, pipW: CGFloat, pipH: CGFloat) -> CGPoint {
+        let hw = pipW / 2 + thumbPad
+        let hh = pipH / 2 + thumbPad
         let corners: [CGPoint] = [
             CGPoint(x: hw,                  y: hh + thumbTopInset),              // top-left
             CGPoint(x: size.width / 2,      y: hh + thumbTopInset),              // top-center
@@ -606,6 +620,8 @@ struct RecordingView: View {
         settings.torchMode = .off
         thumbnailPosition = nil
         settings.savedThumbnailPosition = nil
+        fbThumbnailPosition = nil
+        settings.savedFrontBackThumbnailPosition = nil
         // Every mode (re)enters on the rear camera — clear any prior front flip.
         settings.dualLensUseFrontCamera = false
         switch mode {
@@ -725,6 +741,10 @@ struct RecordingView: View {
                         cameraManager.startRecording()
                     }
                 }
+                // Prevent starting a new take until the previous clip finishes
+                // saving — protects against the recorder-reuse race.
+                .disabled(cameraManager.isSaving)
+                .opacity(cameraManager.isSaving ? 0.5 : 1.0)
             }
         }
         .alert("Unsupported Setting", isPresented: $showUnsupportedAlert) {
@@ -934,6 +954,9 @@ private struct FrontCameraPipImage: View {
                 Image(decorative: snapshot, scale: 1.0)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
+                    // The PiP is always the front camera — mirror it so it matches
+                    // the mirrored fullscreen selfie preview. (Recording stays un-mirrored.)
+                    .scaleEffect(x: -1, y: 1)
             } else {
                 Color.black
             }

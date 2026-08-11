@@ -15,6 +15,13 @@ enum PhotoLibrarySaver {
         landscapeURL: URL,
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
+        #if DEBUG
+        if UserDefaults.standard.bool(forKey: "debugSimulateSaveFailure") {
+            completion(.failure(SaveError.simulatedFailure))
+            return
+        }
+        #endif
+
         // Step 1: save portrait
         PHPhotoLibrary.shared().performChanges {
             PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: portraitURL)
@@ -41,6 +48,13 @@ enum PhotoLibrarySaver {
         url: URL,
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
+        #if DEBUG
+        if UserDefaults.standard.bool(forKey: "debugSimulateSaveFailure") {
+            completion(.failure(SaveError.simulatedFailure))
+            return
+        }
+        #endif
+
         PHPhotoLibrary.shared().performChanges {
             PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
         } completionHandler: { success, error in
@@ -56,9 +70,13 @@ enum PhotoLibrarySaver {
 
     enum SaveError: LocalizedError {
         case unknownError
+        case simulatedFailure
 
         var errorDescription: String? {
-            "An unknown error occurred while saving to Photos."
+            switch self {
+            case .unknownError:     return "An unknown error occurred while saving to Photos."
+            case .simulatedFailure: return "Simulated save failure (debug only)."
+            }
         }
     }
 }

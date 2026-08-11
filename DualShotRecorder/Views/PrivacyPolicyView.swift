@@ -2,7 +2,7 @@ import SwiftUI
 
 struct PrivacyPolicyView: View {
 
-    private let lastUpdated = "July 2026"
+    private let lastUpdated = "August 2026"
 
     var body: some View {
         ScrollView {
@@ -49,7 +49,9 @@ struct PrivacyPolicyView: View {
 
                 PolicySection(title: "Data Storage") {
                     """
-                    All video files are stored locally on your device. Temporary working files created during recording are deleted automatically once your clips are saved to Photos. Your recordings are never stored on our servers.
+                    All video files are stored locally on your device. When a recording is saved successfully to your Photos library, its temporary working file is deleted automatically.
+
+                    If a save does not complete — for example, because Photos access is turned off or your device storage is full — the recording is kept in the App's private on-device storage so that you can recover it. It stays there until you save it or delete it yourself. None of this ever leaves your device, and your recordings are never stored on our servers.
                     """
                 }
 
@@ -71,6 +73,14 @@ struct PrivacyPolicyView: View {
                     • RevenueCat — validates purchases and manages subscription status.
 
                     The App contains no advertising networks and no other third-party analytics or tracking SDKs beyond what is described above.
+                    """
+                }
+
+                PolicySection(title: "Diagnostic Information") {
+                    """
+                    If you choose to report an issue from within the App, EverShot prepares an email to us that includes basic technical details about your device and settings — such as your device model, iOS version, App version, and the recording mode and quality settings in use. This information helps us diagnose the problem faster.
+
+                    Nothing is sent automatically. The email is created in your own mail app, and you decide whether to send it. We use this information solely to respond to your report.
                     """
                 }
 

@@ -20,6 +20,10 @@ struct EverShotApp: App {
         Purchases.logLevel = .debug
         Purchases.configure(withAPIKey: PurchaseManager.revenueCatAPIKey)
 
+        // Recover any recordings left orphaned in temp by a crash or failed
+        // finalize in a previous session, before iOS purges them.
+        RecoveryStore.shared.preserveOrphans()
+
         configureAudioSession()
         // Increment exactly once per process launch using UserDefaults directly.
         // @AppStorage is not safe to write in init() before the property is fully initialized.

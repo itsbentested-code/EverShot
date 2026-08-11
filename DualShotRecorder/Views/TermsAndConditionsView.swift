@@ -2,7 +2,7 @@ import SwiftUI
 
 struct TermsAndConditionsView: View {
 
-    private let lastUpdated = "July 2026"
+    private let lastUpdated = "August 2026"
 
     var body: some View {
         ScrollView {
@@ -26,7 +26,7 @@ struct TermsAndConditionsView: View {
                     """
                 }
 
-                TermsSection(title: "Subscriptions, Free Trial, and Billing") {
+                TermsSection(title: "Subscriptions, One-Time Purchase, and Billing") {
                     """
                     EverShot offers auto-renewing subscriptions that unlock the App's features:
 
@@ -37,7 +37,9 @@ struct TermsAndConditionsView: View {
                     • You can manage or cancel your subscription in your Apple ID account settings after purchase. Deleting the App does not cancel your subscription.
                     • If you begin a free trial and then purchase a subscription, any unused portion of the trial is forfeited.
 
-                    Prices are shown in your local currency, may vary by region, and may change over time in accordance with App Store rules.
+                    EverShot also offers a one-time "Lifetime" purchase (for example, $14.99, in your local currency) that unlocks the App's features permanently on your Apple account, with no recurring charges. A one-time purchase is not a subscription: it does not renew and is not billed again. Payment is charged to your Apple ID upon confirmation of purchase.
+
+                    All purchases are non-refundable except where required by law or under Apple's App Store refund policies. Prices are shown in your local currency, may vary by region, and may change over time in accordance with App Store rules.
                     """
                 }
 
@@ -68,6 +70,8 @@ struct TermsAndConditionsView: View {
                     EverShot is provided "as is" without warranties of any kind, either express or implied. We do not warrant that the App will be error-free, uninterrupted, or suitable for any particular purpose.
 
                     We are not responsible for any loss of recordings, data corruption, or device issues arising from use of the App.
+
+                    Recordings can occasionally fail to save for reasons outside our control, such as insufficient device storage or interruptions from the operating system. We recommend confirming that important footage has been saved to your Photos library before relying on it or deleting it from your device. The App provides a recovery option for recordings that could not be saved automatically, but we cannot guarantee that every recording will be recoverable.
                     """
                 }
 

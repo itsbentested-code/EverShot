@@ -192,6 +192,8 @@ final class RecordingSettings: ObservableObject {
         static let teleprompterSpeed   = "evershot.teleprompterSpeed"
         static let thumbnailX          = "evershot.thumbnailX"
         static let thumbnailY          = "evershot.thumbnailY"
+        static let fbThumbnailX        = "evershot.fbThumbnailX"
+        static let fbThumbnailY        = "evershot.fbThumbnailY"
     }
 
     // MARK: - Save Preferences Toggle
@@ -306,6 +308,27 @@ final class RecordingSettings: ObservableObject {
             } else {
                 UserDefaults.standard.removeObject(forKey: Keys.thumbnailX)
                 UserDefaults.standard.removeObject(forKey: Keys.thumbnailY)
+            }
+        }
+    }
+
+    // Front/Back mode uses a taller, portrait-shaped PiP, so it needs its own
+    // saved position — the landscape PiP's coordinates would clip it off-screen.
+    var savedFrontBackThumbnailPosition: CGPoint? {
+        get {
+            let ud = UserDefaults.standard
+            guard ud.object(forKey: Keys.fbThumbnailX) != nil else { return nil }
+            return CGPoint(x: ud.double(forKey: Keys.fbThumbnailX),
+                           y: ud.double(forKey: Keys.fbThumbnailY))
+        }
+        set {
+            guard savePreferences else { return }
+            if let pos = newValue {
+                UserDefaults.standard.set(pos.x, forKey: Keys.fbThumbnailX)
+                UserDefaults.standard.set(pos.y, forKey: Keys.fbThumbnailY)
+            } else {
+                UserDefaults.standard.removeObject(forKey: Keys.fbThumbnailX)
+                UserDefaults.standard.removeObject(forKey: Keys.fbThumbnailY)
             }
         }
     }

@@ -1167,7 +1167,11 @@ final class CameraManager: NSObject, ObservableObject {
 
     func startRecording() {
         print("★ CameraManager.startRecording() — dualLensRecorder=\(dualLensRecorder != nil) singleLensRecorder=\(singleLensRecorder != nil) frontBackRecorder=\(frontBackRecorder != nil) wideDeviceRef=\(wideDeviceRef != nil)")
-        guard !isRecording else { return }
+        // Block while a previous clip is still saving. Starting a new take mid-save
+        // reuses the same recorder and clobbers the in-flight clip's finalization,
+        // silently losing it (this is what wiped the rapid stop/start dual-lens takes).
+        // Wait until the save completes before allowing a new recording.
+        guard !isRecording, !isSaving else { return }
 
         DispatchQueue.main.async {
             UIApplication.shared.isIdleTimerDisabled = true  // prevent screen sleep during recording
@@ -1276,6 +1280,11 @@ final class CameraManager: NSObject, ObservableObject {
 
             let errorHandler: (String) -> Void = { [weak self] error in
                 DispatchQueue.main.async {
+                    // A recording failed to finalize (writer error, interruption,
+                    // or only one of two files finished). Any partial/finished files
+                    // are still sitting in temp — move them into recovery so they're
+                    // never silently lost, and the user can retry or export them.
+                    RecoveryStore.shared.preserveOrphans()
                     self?.isSaving = false
                     self?.saveError = error
                     self?.endBackgroundTaskIfNeeded()
@@ -1309,7 +1318,9 @@ final class CameraManager: NSObject, ObservableObject {
                     try? FileManager.default.removeItem(at: url)
                 case .failure(let error):
                     self?.saveError = error.localizedDescription
-                    try? FileManager.default.removeItem(at: url)
+                    // Move the recording out of temp (which iOS can purge) into
+                    // persistent storage so the user can recover/retry it.
+                    RecoveryStore.shared.preserve(url)
                 }
                 self?.endBackgroundTaskIfNeeded()
             }
@@ -1331,9 +1342,10 @@ final class CameraManager: NSObject, ObservableObject {
                     try? FileManager.default.removeItem(at: landscapeURL)
                 case .failure(let error):
                     self?.saveError = error.localizedDescription
-                    // Clean up temp files even on failure — don't leave them accumulating
-                    try? FileManager.default.removeItem(at: portraitURL)
-                    try? FileManager.default.removeItem(at: landscapeURL)
+                    // Move the recordings out of temp (which iOS can purge) into
+                    // persistent storage so the user can recover/retry them.
+                    RecoveryStore.shared.preserve(portraitURL)
+                    RecoveryStore.shared.preserve(landscapeURL)
                 }
                 // Release the background task now that we're fully done saving.
                 self?.endBackgroundTaskIfNeeded()

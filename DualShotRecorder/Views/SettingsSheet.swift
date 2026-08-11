@@ -8,6 +8,13 @@ struct SettingsSheet: View {
     @Environment(\.openURL) private var openURL
 
     @State private var showPaywallPreview = false
+    @ObservedObject private var recovery = RecoveryStore.shared
+    @State private var showRecovery = false
+    @State private var showReport = false
+
+    #if DEBUG
+    @AppStorage("debugSimulateSaveFailure") private var debugSimulateSaveFailure = false
+    #endif
 
     // MARK: - Computed helpers
 
@@ -248,14 +255,12 @@ struct SettingsSheet: View {
                         }
                     }
 
-                    // 3. Give Us Feedback
+                    // 3. Report an Issue
                     Button {
-                        if let url = URL(string: "mailto:hello@bentested.com?subject=EverShot%20Feedback") {
-                            openURL(url)
-                        }
+                        showReport = true
                     } label: {
                         HStack {
-                            Text("Give Us Feedback")
+                            Text("Report an Issue")
                                 .foregroundColor(.primary)
                             Spacer()
                             Image(systemName: "chevron.right")
@@ -299,9 +304,33 @@ struct SettingsSheet: View {
                     Text("About")
                 }
 
+                // MARK: Recovery (shown only when there are unsaved recordings)
+                if recovery.hasPending {
+                    Section {
+                        Button {
+                            showRecovery = true
+                        } label: {
+                            HStack {
+                                Label("Recover Unsaved Recordings", systemImage: "exclamationmark.arrow.circlepath")
+                                    .foregroundColor(.primary)
+                                Spacer()
+                                Text("\(recovery.pending.count)")
+                                    .foregroundColor(.secondary)
+                                Image(systemName: "chevron.right")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    } footer: {
+                        Text("Recordings that couldn't be saved to Photos. Tap to save or export them.")
+                    }
+                }
+
                 // MARK: Developer (debug builds only)
                 #if DEBUG
                 Section {
+                    Toggle("Simulate Save Failure", isOn: $debugSimulateSaveFailure)
+
                     Button {
                         showPaywallPreview = true
                     } label: {
@@ -348,6 +377,12 @@ struct SettingsSheet: View {
             .fullScreenCover(isPresented: $showPaywallPreview) {
                 PaywallView(onComplete: { showPaywallPreview = false },
                             isPreview: true)
+            }
+            .sheet(isPresented: $showRecovery) {
+                RecoveryView()
+            }
+            .sheet(isPresented: $showReport) {
+                ReportIssueView(settings: settings)
             }
         }
     }
