@@ -52,6 +52,13 @@ final class SingleLensRecorder: NSObject {
     private var isPaused      = false
     private var pauseWallStart: Double = 0
     private var pauseOffset:    CMTime = .zero
+
+    // Last PTS committed to each writer — forces strictly increasing timestamps so
+    // a pause/resume boundary can't hand the writer a stale PTS (which fails it
+    // permanently, dropping the rest of the take and leaving a file with no moov).
+    private var lastPortraitPTS:  CMTime = .invalid
+    private var lastLandscapePTS: CMTime = .invalid
+
     private var exposureObservation:      NSKeyValueObservation?
     private var stabilizationTimeoutItem: DispatchWorkItem?
 
@@ -79,6 +86,11 @@ final class SingleLensRecorder: NSObject {
     // Completion handlers
     private var completionHandler: ((URL, URL) -> Void)?
     private var errorHandler: ((String) -> Void)?
+
+    // Fired once if a writer fails *during* recording (not at stop), so
+    // CameraManager can end the take, preserve partial footage, and warn the user.
+    var onWriterFailure: ((String) -> Void)?
+    private var didReportFailure = false
 
     // Diagnostic: log buffer dimensions once per recording session.
     private var hasLoggedBufferInfo = false
@@ -139,6 +151,9 @@ final class SingleLensRecorder: NSObject {
             self.isDraining     = false
             self.pauseWallStart = 0
             self.pauseOffset    = .zero
+            self.lastPortraitPTS  = .invalid
+            self.lastLandscapePTS = .invalid
+            self.didReportFailure = false
             self.hasLoggedBufferInfo         = false
             self.hasLoggedLandscapeBufferInfo = false
 
@@ -245,6 +260,17 @@ final class SingleLensRecorder: NSObject {
             )
             self.isPaused = false
         }
+    }
+
+    /// Reports a mid-recording writer failure exactly once (called from the writer
+    /// queue when a writer is found in `.failed` while still recording).
+    private func reportWriterFailure(_ message: String) {
+        guard isRecording, !didReportFailure else { return }
+        didReportFailure = true
+        let underlying = portraitWriter?.error ?? landscapeWriter?.error
+        let full = message + (underlying.map { " (\($0.localizedDescription))" } ?? "")
+        print("SingleLensRecorder: ⚠️ writer failed mid-recording — \(full)")
+        DispatchQueue.main.async { [weak self] in self?.onWriterFailure?(full) }
     }
 
     // MARK: - Writer Setup
@@ -447,28 +473,43 @@ final class SingleLensRecorder: NSObject {
                 pts = CMTimeSubtract(self.clampedTimestamp(timestamp), self.pauseOffset)
             }
 
+            if self.portraitWriter?.status == .failed || self.landscapeWriter?.status == .failed {
+                self.reportWriterFailure("The recording encoder stopped unexpectedly.")
+                return
+            }
+
             if let buf = portraitBuffer, let pInput = self.portraitVideoInput,
                self.portraitWriter?.status == .writing {
+                var ppts = pts
+                if self.lastPortraitPTS.isValid, CMTimeCompare(ppts, self.lastPortraitPTS) <= 0 {
+                    ppts = CMTimeAdd(self.lastPortraitPTS, CMTime(value: 1, timescale: 600))
+                }
+                self.lastPortraitPTS = ppts
                 var flushed = 0
                 while flushed < self.portraitPendingFrames.count, pInput.isReadyForMoreMediaData {
                     let (b, t) = self.portraitPendingFrames[flushed]
                     self.portraitPixelBufferAdaptor?.append(b, withPresentationTime: t); flushed += 1
                 }
                 if flushed > 0 { self.portraitPendingFrames.removeFirst(flushed) }
-                if pInput.isReadyForMoreMediaData { self.portraitPixelBufferAdaptor?.append(buf, withPresentationTime: pts) }
-                else if self.portraitPendingFrames.count < 60 { self.portraitPendingFrames.append((buf, pts)) }
+                if pInput.isReadyForMoreMediaData { self.portraitPixelBufferAdaptor?.append(buf, withPresentationTime: ppts) }
+                else if self.portraitPendingFrames.count < 60 { self.portraitPendingFrames.append((buf, ppts)) }
             }
 
             if let buf = landscapeBuffer, let lInput = self.landscapeVideoInput,
                self.landscapeWriter?.status == .writing {
+                var lpts = pts
+                if self.lastLandscapePTS.isValid, CMTimeCompare(lpts, self.lastLandscapePTS) <= 0 {
+                    lpts = CMTimeAdd(self.lastLandscapePTS, CMTime(value: 1, timescale: 600))
+                }
+                self.lastLandscapePTS = lpts
                 var flushed = 0
                 while flushed < self.landscapePendingFrames.count, lInput.isReadyForMoreMediaData {
                     let (b, t) = self.landscapePendingFrames[flushed]
                     self.landscapePixelBufferAdaptor?.append(b, withPresentationTime: t); flushed += 1
                 }
                 if flushed > 0 { self.landscapePendingFrames.removeFirst(flushed) }
-                if lInput.isReadyForMoreMediaData { self.landscapePixelBufferAdaptor?.append(buf, withPresentationTime: pts) }
-                else if self.landscapePendingFrames.count < 60 { self.landscapePendingFrames.append((buf, pts)) }
+                if lInput.isReadyForMoreMediaData { self.landscapePixelBufferAdaptor?.append(buf, withPresentationTime: lpts) }
+                else if self.landscapePendingFrames.count < 60 { self.landscapePendingFrames.append((buf, lpts)) }
             }
         }
     }
@@ -520,11 +561,14 @@ final class SingleLensRecorder: NSObject {
         ) else { return }
 
         writerQueue.async { [weak self] in
-            guard let self = self,
-                  let lInput = self.landscapeVideoInput,
-                  self.landscapeWriter?.status == .writing else { return }
+            guard let self = self, let lInput = self.landscapeVideoInput else { return }
+            if self.landscapeWriter?.status == .failed {
+                self.reportWriterFailure("The recording encoder stopped unexpectedly.")
+                return
+            }
+            guard self.landscapeWriter?.status == .writing else { return }
 
-            let pts: CMTime
+            var pts: CMTime
             if self.settings.isTimelapse {
                 // Use portrait writtenFrames as the reference so both files stay in sync.
                 let fps = CMTimeScale(self.settings.frameRate.rawValue)
@@ -533,6 +577,12 @@ final class SingleLensRecorder: NSObject {
             } else {
                 pts = CMTimeSubtract(self.clampedTimestamp(timestamp), self.pauseOffset)
             }
+
+            // Guarantee a strictly increasing PTS (shared with the crop-path landscape).
+            if self.lastLandscapePTS.isValid, CMTimeCompare(pts, self.lastLandscapePTS) <= 0 {
+                pts = CMTimeAdd(self.lastLandscapePTS, CMTime(value: 1, timescale: 600))
+            }
+            self.lastLandscapePTS = pts
 
             var flushed = 0
             while flushed < self.landscapePendingFrames.count, lInput.isReadyForMoreMediaData {

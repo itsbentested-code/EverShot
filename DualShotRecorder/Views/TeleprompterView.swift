@@ -16,6 +16,8 @@ struct TeleprompterView: View {
     @Binding var speed: TeleprompterSpeed
 
     @State private var isPaused = false
+    @State private var controller = TeleprompterController()
+    @State private var lastDragTranslation: CGFloat = 0
 
     /// Cycles slow → medium → fast → slow on each tap.
     /// Writes back through the binding so the Settings picker stays in sync.
@@ -43,13 +45,17 @@ struct TeleprompterView: View {
             Color.black.opacity(0.30)
 
             // ── Scrolling text (UIKit-backed, no SwiftUI layout per frame) ────
+            // Inert — all touch handling lives on the tap/drag layer below so it
+            // never competes with the control buttons.
             TeleprompterScrollView(
                 text: text.isEmpty
                     ? "No script set. Add your script in Settings → Teleprompter."
                     : text,
                 pixelsPerSecond: speed.pixelsPerSecond,
-                isPaused: isPaused
+                isPaused: isPaused,
+                controller: controller
             )
+            .allowsHitTesting(false)
 
             // ── Soft top fade ─────────────────────────────────────────────────
             VStack {
@@ -61,6 +67,28 @@ struct TeleprompterView: View {
                 Spacer()
             }
             .allowsHitTesting(false)
+
+            // ── Tap / drag layer ──────────────────────────────────────────────
+            // Fills the script area but stays clear of the top control strip, so
+            // tapping the play/speed buttons is never also caught here.
+            //   • Tap the script  → pause where it is, so you can reposition.
+            //   • Drag the script → scrub to any section (down rewinds toward the
+            //     top, up moves further along); it stays paused so it holds still.
+            //   • Tap play        → resume from the spot you chose.
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture { isPaused = true }
+                .gesture(
+                    DragGesture(minimumDistance: 4)
+                        .onChanged { value in
+                            if !isPaused { isPaused = true }
+                            let step = value.translation.height - lastDragTranslation
+                            lastDragTranslation = value.translation.height
+                            controller.scrub(by: -step)
+                        }
+                        .onEnded { _ in lastDragTranslation = 0 }
+                )
+                .padding(.top, 76)
 
             // ── Top-right controls ────────────────────────────────────────────
             VStack(spacing: 8) {
@@ -85,6 +113,15 @@ struct TeleprompterView: View {
     }
 }
 
+// MARK: - Imperative controller
+
+/// Lets the SwiftUI overlay drive the UIKit scroll engine directly (drag-to-scrub)
+/// without routing that action through value-diffed bindings.
+final class TeleprompterController {
+    weak var view: TeleprompterScrollUIView?
+    func scrub(by delta: CGFloat) { view?.scrub(by: delta) }
+}
+
 // MARK: - UIKit scroll view wrapper
 
 /// Wraps TeleprompterScrollUIView so SwiftUI can embed it.
@@ -94,10 +131,12 @@ private struct TeleprompterScrollView: UIViewRepresentable {
     let text: String
     let pixelsPerSecond: Double
     let isPaused: Bool
+    let controller: TeleprompterController
 
     func makeUIView(context: Context) -> TeleprompterScrollUIView {
         let view = TeleprompterScrollUIView()
         view.configure(text: text, pixelsPerSecond: pixelsPerSecond)
+        controller.view = view
         return view
     }
 
@@ -193,6 +232,15 @@ final class TeleprompterScrollUIView: UIView {
             lastTimestamp = CACurrentMediaTime()
         }
         paused = value
+    }
+
+    /// Manually moves the script by a pixel delta so the user can drag to any
+    /// section. Positive delta scrolls forward (later in the script), negative
+    /// rewinds toward the top. Clamped to the script's start and end.
+    func scrub(by delta: CGFloat) {
+        let total = max(bounds.height + label.frame.height, 1)
+        scrollOffset = min(max(scrollOffset + delta, 0), total)
+        label.frame.origin.y = bounds.height - scrollOffset
     }
 
     // MARK: Layout

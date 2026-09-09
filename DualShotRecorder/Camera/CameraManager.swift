@@ -26,6 +26,11 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var saveComplete = false
     @Published var saveError: String?
 
+    /// Set when a take is ended by a mid-recording writer failure. Preferred over
+    /// the raw error string so the user sees a clear, reassuring message and knows
+    /// to check Recover Recordings. Cleared once a save/error path consumes it.
+    private var interruptionMessage: String?
+
     /// Front/Back mode: whether the FRONT camera is currently the fullscreen "main"
     /// (true) or the corner PiP (false). Drives the live preview routing + the composite.
     @Published var frontBackMainIsFront = true
@@ -1195,6 +1200,17 @@ final class CameraManager: NSObject, ObservableObject {
 
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
+
+            // Backstop: if any writer fails mid-recording, end the take immediately,
+            // preserve partial footage, and warn — never let the timer run on over a
+            // dead writer again.
+            let failureHandler: (String) -> Void = { [weak self] message in
+                self?.handleWriterFailureDuringRecording(message)
+            }
+            self.frontBackRecorder?.onWriterFailure  = failureHandler
+            self.dualLensRecorder?.onWriterFailure   = failureHandler
+            self.singleLensRecorder?.onWriterFailure = failureHandler
+
             if let fbRecorder = self.frontBackRecorder {
                 fbRecorder.startRecording(
                     frontDevice: self.frontDeviceRef,
@@ -1214,6 +1230,18 @@ final class CameraManager: NSObject, ObservableObject {
                     singleRecorder.startRecording(device: device)
                 }
             }
+        }
+    }
+
+    /// Called (on the main thread) when a recorder reports its writer failed while
+    /// we still believe we're recording. Ends the take immediately and routes any
+    /// partial footage to Recover Recordings via the normal stop → error path.
+    private func handleWriterFailureDuringRecording(_ message: String) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, self.isRecording else { return }
+            self.interruptionMessage = "Recording stopped early because it was interrupted. Any footage captured up to that point was moved to Recover Recordings (in Settings)."
+            print("CameraManager: mid-recording writer failure — \(message)")
+            self.stopRecording()
         }
     }
 
@@ -1286,7 +1314,8 @@ final class CameraManager: NSObject, ObservableObject {
                     // never silently lost, and the user can retry or export them.
                     RecoveryStore.shared.preserveOrphans()
                     self?.isSaving = false
-                    self?.saveError = error
+                    self?.saveError = self?.interruptionMessage ?? error
+                    self?.interruptionMessage = nil
                     self?.endBackgroundTaskIfNeeded()
                 }
             }
@@ -1315,9 +1344,11 @@ final class CameraManager: NSObject, ObservableObject {
                 switch result {
                 case .success:
                     self?.saveComplete = true
+                    self?.interruptionMessage = nil
                     try? FileManager.default.removeItem(at: url)
                 case .failure(let error):
-                    self?.saveError = error.localizedDescription
+                    self?.saveError = self?.interruptionMessage ?? error.localizedDescription
+                    self?.interruptionMessage = nil
                     // Move the recording out of temp (which iOS can purge) into
                     // persistent storage so the user can recover/retry it.
                     RecoveryStore.shared.preserve(url)
@@ -1337,11 +1368,13 @@ final class CameraManager: NSObject, ObservableObject {
                 switch result {
                 case .success:
                     self?.saveComplete = true
+                    self?.interruptionMessage = nil
                     // Clean up temp files
                     try? FileManager.default.removeItem(at: portraitURL)
                     try? FileManager.default.removeItem(at: landscapeURL)
                 case .failure(let error):
-                    self?.saveError = error.localizedDescription
+                    self?.saveError = self?.interruptionMessage ?? error.localizedDescription
+                    self?.interruptionMessage = nil
                     // Move the recordings out of temp (which iOS can purge) into
                     // persistent storage so the user can recover/retry them.
                     RecoveryStore.shared.preserve(portraitURL)

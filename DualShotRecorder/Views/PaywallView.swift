@@ -288,9 +288,9 @@ struct PaywallView: View {
     private var planSelector: some View {
         VStack(spacing: 10) {
             planRow(id: PurchaseManager.monthlyID, title: "Monthly",
-                    price: "\(monthlyPrice)/mo", note: "7-day free trial", badge: "Most Popular")
+                    price: "\(monthlyPrice)/mo", note: "7-day free trial", badge: nil)
             planRow(id: PurchaseManager.yearlyID, title: "Yearly",
-                    price: "\(yearlyPrice)/yr", note: "7-day free trial", badge: nil)
+                    price: "\(yearlyPrice)/yr", note: "7-day free trial", badge: "Most Popular")
             planRow(id: PurchaseManager.lifetimeID, title: "Lifetime",
                     price: lifetimePrice, note: "One-time — pay once, own forever", badge: nil)
         }

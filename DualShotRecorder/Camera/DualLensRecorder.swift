@@ -76,6 +76,13 @@ final class DualLensRecorder: NSObject {
     private var pauseWallStart: Double = 0   // CACurrentMediaTime() snapshot
     private var pauseOffset:    CMTime = .zero  // accumulated pause duration
 
+    // Last PTS actually committed to each writer. Used to force strictly
+    // increasing timestamps so a pause/resume boundary (or clock drift) can never
+    // hand the writer a stale PTS — which would fail it permanently and silently
+    // drop the rest of the take, leaving a file with no moov atom.
+    private var lastPortraitPTS:  CMTime = .invalid
+    private var lastLandscapePTS: CMTime = .invalid
+
     // MARK: - AEC Stabilisation Gate
     //
     // Every lens-assignment change rebuilds AVCaptureMultiCamSession from scratch,
@@ -127,6 +134,12 @@ final class DualLensRecorder: NSObject {
     // Completion handlers
     private var completionHandler: ((URL, URL) -> Void)?
     private var errorHandler: ((String) -> Void)?
+
+    // Fired once if a writer fails *during* recording (not at stop). Lets
+    // CameraManager end the take immediately, preserve partial footage, and warn
+    // the user — instead of the timer running on over a dead writer.
+    var onWriterFailure: ((String) -> Void)?
+    private var didReportFailure = false
 
     // MARK: - Init
 
@@ -181,6 +194,9 @@ final class DualLensRecorder: NSObject {
             self.isDraining     = false
             self.pauseWallStart = 0
             self.pauseOffset    = .zero
+            self.lastPortraitPTS  = .invalid
+            self.lastLandscapePTS = .invalid
+            self.didReportFailure = false
             self.hasLoggedPortraitBufferInfo  = false
             self.hasLoggedLandscapeBufferInfo = false
 
@@ -306,6 +322,18 @@ final class DualLensRecorder: NSObject {
             )
             self.isPaused = false
         }
+    }
+
+    /// Reports a mid-recording writer failure exactly once. Call from the writer
+    /// queue when a writer is found in `.failed` while we still think we're
+    /// recording. CameraManager reacts by stopping the take and preserving footage.
+    private func reportWriterFailure(_ message: String) {
+        guard isRecording, !didReportFailure else { return }
+        didReportFailure = true
+        let underlying = portraitWriter?.error ?? landscapeWriter?.error
+        let full = message + (underlying.map { " (\($0.localizedDescription))" } ?? "")
+        print("DualLensRecorder: ⚠️ writer failed mid-recording — \(full)")
+        DispatchQueue.main.async { [weak self] in self?.onWriterFailure?(full) }
     }
 
     // MARK: - Writer Setup
@@ -512,11 +540,14 @@ final class DualLensRecorder: NSObject {
         ) else { return }
 
         writerQueue.async { [weak self] in
-            guard let self = self,
-                  let input = self.portraitVideoInput,
-                  self.portraitWriter?.status == .writing else { return }
+            guard let self = self, let input = self.portraitVideoInput else { return }
+            if self.portraitWriter?.status == .failed {
+                self.reportWriterFailure("The recording encoder stopped unexpectedly.")
+                return
+            }
+            guard self.portraitWriter?.status == .writing else { return }
 
-            let pts: CMTime
+            var pts: CMTime
             if self.settings.isTimelapse {
                 let fps = CMTimeScale(self.settings.frameRate.rawValue)
                 pts = CMTimeAdd(self.portraitSessionTimestamp,
@@ -527,6 +558,13 @@ final class DualLensRecorder: NSObject {
                 let rawPTS = self.clampedPortraitTimestamp(timestamp)
                 pts = CMTimeSubtract(rawPTS, self.pauseOffset)
             }
+
+            // Guarantee a strictly increasing PTS (see lastPortraitPTS above).
+            if self.lastPortraitPTS.isValid,
+               CMTimeCompare(pts, self.lastPortraitPTS) <= 0 {
+                pts = CMTimeAdd(self.lastPortraitPTS, CMTime(value: 1, timescale: 600))
+            }
+            self.lastPortraitPTS = pts
 
             var flushed = 0
             while flushed < self.portraitPendingFrames.count, input.isReadyForMoreMediaData {
@@ -603,11 +641,14 @@ final class DualLensRecorder: NSObject {
         ) else { return }
 
         writerQueue.async { [weak self] in
-            guard let self = self,
-                  let input = self.landscapeVideoInput,
-                  self.landscapeWriter?.status == .writing else { return }
+            guard let self = self, let input = self.landscapeVideoInput else { return }
+            if self.landscapeWriter?.status == .failed {
+                self.reportWriterFailure("The recording encoder stopped unexpectedly.")
+                return
+            }
+            guard self.landscapeWriter?.status == .writing else { return }
 
-            let pts: CMTime
+            var pts: CMTime
             if self.settings.isTimelapse {
                 let fps = CMTimeScale(self.settings.frameRate.rawValue)
                 pts = CMTimeAdd(self.landscapeSessionTimestamp,
@@ -617,6 +658,13 @@ final class DualLensRecorder: NSObject {
                 let rawPTS = self.clampedLandscapeTimestamp(timestamp)
                 pts = CMTimeSubtract(rawPTS, self.pauseOffset)
             }
+
+            // Guarantee a strictly increasing PTS (see lastLandscapePTS above).
+            if self.lastLandscapePTS.isValid,
+               CMTimeCompare(pts, self.lastLandscapePTS) <= 0 {
+                pts = CMTimeAdd(self.lastLandscapePTS, CMTime(value: 1, timescale: 600))
+            }
+            self.lastLandscapePTS = pts
 
             var flushed = 0
             while flushed < self.landscapePendingFrames.count, input.isReadyForMoreMediaData {

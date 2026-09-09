@@ -66,6 +66,11 @@ final class FrontBackRecorder: NSObject {
     private var pauseWallStart: Double = 0
     private var pauseOffset: CMTime = .zero
 
+    // Last PTS committed — forces strictly increasing timestamps so a pause/resume
+    // boundary can't hand the writer a stale PTS (which fails it permanently,
+    // dropping the rest of the take and leaving a file with no moov atom).
+    private var lastPTS: CMTime = .invalid
+
     // MARK: - AEC stabilisation gate (mirrors DualLensRecorder)
 
     private static let kLeadingFrameSkipCount = 5
@@ -96,6 +101,11 @@ final class FrontBackRecorder: NSObject {
 
     private var completionHandler: ((URL) -> Void)?
     private var errorHandler: ((String) -> Void)?
+
+    // Fired once if the writer fails *during* recording (not at stop), so
+    // CameraManager can end the take, preserve partial footage, and warn the user.
+    var onWriterFailure: ((String) -> Void)?
+    private var didReportFailure = false
 
     private let deviceRGB = CGColorSpaceCreateDeviceRGB()
 
@@ -137,6 +147,8 @@ final class FrontBackRecorder: NSObject {
             self.isDraining     = false
             self.pauseWallStart = 0
             self.pauseOffset    = .zero
+            self.lastPTS        = .invalid
+            self.didReportFailure = false
             self.hasLoggedInfo  = false
             self.rearLock.lock(); self.latestRearBuffer = nil; self.rearLock.unlock()
 
@@ -238,6 +250,16 @@ final class FrontBackRecorder: NSObject {
             self.pauseOffset = CMTimeAdd(self.pauseOffset, CMTime(seconds: paused, preferredTimescale: 600))
             self.isPaused = false
         }
+    }
+
+    /// Reports a mid-recording writer failure exactly once (called from the writer
+    /// queue when the writer is found in `.failed` while still recording).
+    private func reportWriterFailure(_ message: String) {
+        guard isRecording, !didReportFailure else { return }
+        didReportFailure = true
+        let full = message + (writer?.error.map { " (\($0.localizedDescription))" } ?? "")
+        print("FrontBackRecorder: ⚠️ writer failed mid-recording — \(full)")
+        DispatchQueue.main.async { [weak self] in self?.onWriterFailure?(full) }
     }
 
     // MARK: - Writer Setup
@@ -446,11 +468,20 @@ final class FrontBackRecorder: NSObject {
         guard let composite = makeComposite(mainFull: mainFull, pipFull: pipFull) else { return }
 
         writerQueue.async { [weak self] in
-            guard let self = self,
-                  let input = self.videoInput,
-                  self.writer?.status == .writing else { return }
+            guard let self = self, let input = self.videoInput else { return }
+            if self.writer?.status == .failed {
+                self.reportWriterFailure("The recording encoder stopped unexpectedly.")
+                return
+            }
+            guard self.writer?.status == .writing else { return }
 
-            let pts = CMTimeSubtract(CMTimeMaximum(timestamp, self.sessionStartTimestamp), self.pauseOffset)
+            var pts = CMTimeSubtract(CMTimeMaximum(timestamp, self.sessionStartTimestamp), self.pauseOffset)
+
+            // Guarantee a strictly increasing PTS (see lastPTS above).
+            if self.lastPTS.isValid, CMTimeCompare(pts, self.lastPTS) <= 0 {
+                pts = CMTimeAdd(self.lastPTS, CMTime(value: 1, timescale: 600))
+            }
+            self.lastPTS = pts
 
             var flushed = 0
             while flushed < self.pendingFrames.count, input.isReadyForMoreMediaData {
